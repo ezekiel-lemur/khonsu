@@ -11,23 +11,15 @@ logging.basicConfig (level = logging.INFO)
 
 bot = discord.Client ()
 
-consumer = "tt"
-consumer_s = "tt"
-token = "tt-tt"
-token_s = "tt"
+consumer = 
+consumer_s = 
+token = 
+token_s = 
 
 auth = tweepy.OAuthHandler(consumer,consumer_s)
 auth.set_access_token(token,token_s)
 auth.secure = True
 api =tweepy.API(auth)
-
-
-@bot.event
-async def on_ready ():
-    print("Ready.")
-
-fpl = 761568335138058240
-channel = bot.get_channel ("tt")
 
 channel = None
 
@@ -59,5 +51,8 @@ async def get_latest_tweet():
                print("sent")
                print(channel)
      threading.Timer(5, get_latest_tweet).start()
+    
+    
 
-bot.run ('tt.tt.tt')
+bot.run ('..')
+
