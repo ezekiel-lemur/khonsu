@@ -11,38 +11,46 @@ logging.basicConfig (level = logging.INFO)
 
 bot = discord.Client ()
 
-consumer = "key"
-consumer_s = "key"
-token = "key-key"
-token_s = "key"
+consumer = "tt"
+consumer_s = "tt"
+token = "tt-tt"
+token_s = "tt"
 
 auth = tweepy.OAuthHandler(consumer,consumer_s)
 auth.set_access_token(token,token_s)
 auth.secure = True
 api =tweepy.API(auth)
 
+
 @bot.event
 async def on_ready ():
     print("Ready.")
 
 fpl = 761568335138058240
+channel = bot.get_channel ("tt")
 
-CHANNEL = bot.get_channel ("330048090029686786")
+
  
 def get_latest_tweet():
      tweet_list = api.user_timeline(id=fpl,count=1,page=1)
      tweet = tweet_list[0]
      latest = tweet.text
-     if re.search('the', latest, re.M|re.I) and \
-             (re.search('Assist', latest, re.M|re.I) or \
-             re.search('RED', latest, re.M|re.I)):
-               bot.send_message (CHANNEL, latest) 
+     print(latest)
+     is_goal = re.search('Goal', latest, re.M|re.I) 
+     is_assist = re.search('Assist', latest, re.M|re.I)
+     is_one =  re.search('the', latest, re.M|re.I)
+     if (is_goal and is_assist) or is_one:
+               print("This is it working")
+               bot.send_message (channel, latest) 
+               print("sent")
      threading.Timer(5, get_latest_tweet).start()
- 
+
+
 @bot.event
 async def on_ready():
     print("Ready")
     get_latest_tweet()
+    
 
-bot.run ('key') # You can find the token where you created the bot account
+bot.run ('tt.tt.tt')
 
