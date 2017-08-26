@@ -20,7 +20,7 @@ token_s = ""
 auth = tweepy.OAuthHandler(consumer,consumer_s)
 auth.set_access_token(token,token_s)
 auth.secure = True
-api =tweepy.API(auth)
+api = tweepy.API(auth)
 
 channel = None
 
