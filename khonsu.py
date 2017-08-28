@@ -1,4 +1,4 @@
-import discord 
+import discord
 import logging
 import asyncio
 import json
@@ -39,11 +39,12 @@ async def on_ready ():
             print('Added {}@{}'.format(c.name, c.server.name))
         else:
             print('Couldn\'t find channel {}'.format(chan))
-    
+
     print("Ready.")
     while True:
         await get_latest_tweet()
-        sleep(5)
+        await asyncio.sleep(5)
+
 
 fpl = config['twitter_id']#add any twitter accounts id here
 
@@ -51,28 +52,28 @@ last_tweet_used = None
 
 async def get_latest_tweet():
     global last_tweet_used
-    
+
     tweet_list = api.user_timeline(id=fpl,count=1,page=1)
     tweet = tweet_list[0]
     latest = tweet.text
-    
-    is_goal = re.search('Goal', latest, re.M|re.I) 
+
+    is_goal = re.search('Goal', latest, re.M|re.I)
     is_assist = re.search('Assist', latest, re.M|re.I)
     is_red =  re.search('RED', latest, re.M|re.I)
-    is_scout = re.search('SCOUT', latest, re.M|re.I)
-    
+    is_scout = re.search('scout', latest, re.M|re.I)
+
     if (((is_goal and is_assist) or is_red) \
-            and (latest !=  last_tweet_used)) and not is_scout:     
+            and (latest !=  last_tweet_used)) and not is_scout:
         print("Reached")
         for chan in channel:
             embed_ = discord.Embed (description = latest)
             await bot.send_message (chan, embed=embed_)
             last_tweet_used = latest
-    else:
-        for chan in channel:
-            embed_ = discord.Embed (description = latest)
-            await bot.send_message (chan, embed=embed_)
-            last_tweet_used = latest
+#    else:
+#        for chan in channel:
+#            embed_ = discord.Embed (description = latest)
+#            await bot.send_message (chan, embed=embed_)
+#            last_tweet_used = latest
 
 
 bot.run (config['discord_token']) #add your discord token here
