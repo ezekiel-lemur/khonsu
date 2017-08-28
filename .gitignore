@@ -1,0 +1,15 @@
+# Priv files
+*.priv
+*.priv.*
+priv.*
+
+# Vim files
+*~
+
+# Log and temp files
+*.temp
+*.temp.*
+temp.*
+log.*
+*.log.*
+log.*

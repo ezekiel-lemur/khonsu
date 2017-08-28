@@ -11,53 +11,68 @@ logging.basicConfig (level = logging.INFO)
 
 bot = discord.Client ()
 
+config = dict()
+with open('config.priv.json') as CONFIG:
+    config = json.load(CONFIG)
+
 #add your twitter keys here
-consumer = ""
-consumer_s = ""
-token = ""
-token_s = ""
+consumer = config['consumer']
+consumer_s = config['consumer_s']
+token = config['token']
+token_s = config['token_s']
 
 auth = tweepy.OAuthHandler(consumer,consumer_s)
 auth.set_access_token(token,token_s)
 auth.secure = True
 api = tweepy.API(auth)
 
-channel = None
+channel = list()
 
 @bot.event
 async def on_ready ():
     global channel
-    channel = bot.get_channel ("351055628246188032") # add channel id here (enter dev mode on discord & right click and copy it)
-    if channel is not None:
-        print('Found tweet channel')
-    else:
-        print('Didnt find tweet channel')
+
+    for chan in config['channels']:
+        c = bot.get_channel(chan)
+        if c is not None:
+            channel.append(c)
+            print('Added {}@{}'.format(c.name, c.server.name))
+        else:
+            print('Couldn\'t find channel {}'.format(chan))
+    
     print("Ready.")
     while True:
         await get_latest_tweet()
         sleep(5)
 
-fpl = 761568335138058240 #add any twitter accounts id here
+fpl = config['twitter_id']#add any twitter accounts id here
 
 last_tweet_used = None
 
 async def get_latest_tweet():
-     tweet_list = api.user_timeline(id=fpl,count=1,page=1)
-     tweet = tweet_list[0]
-     latest = tweet.text
-     print(latest)
-     global last_tweet_used
-     is_goal = re.search('Goal', latest, re.M|re.I) 
-     is_assist = re.search('Assist', latest, re.M|re.I)
-     is_one =  re.search('RED', latest, re.M|re.I)
-     if ((is_goal and is_assist) or is_one) and (latest !=  last_tweet_used):
-               print("This is it working")
-               await bot.send_message (channel, latest)
-               last_tweet_used = latest
-               print("sent")
-               print(channel)
-     
+    global last_tweet_used
     
+    tweet_list = api.user_timeline(id=fpl,count=1,page=1)
+    tweet = tweet_list[0]
+    latest = tweet.text
     
+    is_goal = re.search('Goal', latest, re.M|re.I) 
+    is_assist = re.search('Assist', latest, re.M|re.I)
+    is_red =  re.search('RED', latest, re.M|re.I)
+    is_scout = re.search('SCOUT', latest, re.M|re.I)
+    
+    if (((is_goal and is_assist) or is_red) \
+            and (latest !=  last_tweet_used)) and not is_scout:     
+        print("Reached")
+        for chan in channel:
+            embed_ = discord.Embed (description = latest)
+            await bot.send_message (chan, embed=embed_)
+            last_tweet_used = latest
+    else:
+        for chan in channel:
+            embed_ = discord.Embed (description = latest)
+            await bot.send_message (chan, embed=embed_)
+            last_tweet_used = latest
 
-bot.run ('') #add your discord token here
+
+bot.run (config['discord_token']) #add your discord token here
