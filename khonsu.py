@@ -43,12 +43,16 @@ async def on_ready ():
     print("Ready.")
     while True:
         await get_latest_tweet()
+        await get_latest_tweet_sky()
         await asyncio.sleep(5)
 
 
 fpl = config['twitter_id']#add any twitter accounts id here
+sky = config['twitter_id_2']
 
 last_tweet_used = None
+last_tweet_used_sky = None
+
 
 async def get_latest_tweet():
     global last_tweet_used
@@ -57,8 +61,8 @@ async def get_latest_tweet():
     tweet = tweet_list[0]
     latest = tweet.text
 
-    is_goal = re.search('Goal', latest, re.M|re.I)
-    is_assist = re.search('Assist', latest, re.M|re.I)
+    is_goal = re.search('Goal', latest, re.M)
+    is_assist = re.search('Assist', latest, re.M)
     is_red =  re.search('RED', latest, re.M|re.I)
     is_scout = re.search('scout', latest, re.M|re.I)
 
@@ -69,6 +73,27 @@ async def get_latest_tweet():
             embed_ = discord.Embed (description = latest)
             await bot.send_message (chan, embed=embed_)
             last_tweet_used = latest
+
+#get team news from seperate account
+
+async def get_latest_tweet_sky():
+    global last_tweet_used_sky
+
+    tweet_list = api.user_timeline(id=sky,count=1,page=1)
+    tweet = tweet_list[0]
+    latest_sky = tweet.text
+
+    is_team_news = re.search('team v', latest_sky, re.M)
+    is_xi = re.search('XI', latest_sky, re.M)
+
+
+    if (is_team_news or is_xi) and (latest_sky !=  last_tweet_used_sky):
+        print("got team news")
+        for chan in channel:
+            embed_ = discord.Embed (description = latest_sky)
+            await bot.send_message (chan, embed=embed_)
+            last_tweet_used_sky = latest_sky
+
 #    else:
 #        for chan in channel:
 #            embed_ = discord.Embed (description = latest)
