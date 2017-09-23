@@ -61,12 +61,14 @@ async def get_latest_tweet():
     tweet = tweet_list[0]
     latest = tweet.text
 
-    is_goal = re.search('Goal', latest, re.M)
-    is_assist = re.search('Assist', latest, re.M)
-    is_red =  re.search('RED', latest, re.M|re.I)
+    is_goal = re.search('GOAL', latest, re.M)
+    is_assist = re.search('ASSIST', latest, re.M)
+    is_Goal = re.search('Goal', latest, re.M)
+    is_Assist = re.search('Assist', latest, re.M)
+    is_red =  re.search('RED', latest, re.M)
     is_scout = re.search('scout', latest, re.M|re.I)
 
-    if (((is_goal and is_assist) or is_red) \
+    if (((is_goal and is_assist) or (is_Goal and is_Assist) or is_red) \
             and (latest !=  last_tweet_used)) and not is_scout:
         print("Reached")
         for chan in channel:
