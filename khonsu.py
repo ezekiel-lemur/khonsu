@@ -36,7 +36,7 @@ async def on_ready ():
         c = bot.get_channel(chan)
         if c is not None:
             channel.append(c)
-            print('Added {}@{}'.format(c.name, c.server.name))
+            print('Added {}@{}'.format(c.name, 'FantasyPL'))
         else:
             print('Couldn\'t find channel {}'.format(chan))
 
@@ -49,10 +49,11 @@ async def on_ready ():
 
 fpl = config['twitter_id']#add any twitter accounts id here
 sky = config['twitter_id_2']
+bap = config['twitter_id_3']
 
 last_tweet_used = None
 last_tweet_used_sky = None
-
+last_tweet_used_bap = None
 
 async def get_latest_tweet():
     global last_tweet_used
@@ -67,8 +68,10 @@ async def get_latest_tweet():
     is_Assist = re.search('Assist', latest, re.M)
     is_red =  re.search('RED', latest, re.M)
     is_scout = re.search('scout', latest, re.M|re.I)
+    is_baps = re.search('BONUS', latest, re.M)
+    is_prov = re.search('STANDS', latest, re.M)
 
-    if (((is_goal and is_assist) or (is_Goal and is_Assist) or is_red) \
+    if (((is_goal and is_assist) or (is_Goal and is_Assist) or is_red or (is_baps and is_prov)) \
             and (latest !=  last_tweet_used)) and not is_scout:
         print("Reached")
         for chan in channel:
@@ -101,6 +104,24 @@ async def get_latest_tweet_sky():
 #            embed_ = discord.Embed (description = latest)
 #            await bot.send_message (chan, embed=embed_)
 #            last_tweet_used = latest
+
+#get confirmed baps from separate account
+
+async def get_latest_tweet_bap():
+    global last_tweet_used_bap
+
+    tweet_list - api.user_timeline(id=bap,count=1,page=1)
+    tweet = tweet_list[0]
+    latest_bap = tweet.text
+
+    is_confirmed = re.search('Confirmed Bonus', latest_bap, re.M)
+
+    if is_confirmed and (latest_bap !=  last_tweet_used_bap):
+        print("got confirmed baps")
+        for chan in channel:
+            embed_ = discord.Embed (description = latest_bap)
+            await bot.send_message (chan, embed=embed_)
+            last_tweet_used_bap = latest_bap
 
 
 bot.run (config['discord_token']) #add your discord token here
