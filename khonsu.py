@@ -110,7 +110,7 @@ async def get_latest_tweet_sky():
 async def get_latest_tweet_bap():
     global last_tweet_used_bap
 
-    tweet_list - api.user_timeline(id=bap,count=1,page=1)
+    tweet_list = api.user_timeline(id=bap,count=1,page=1)
     tweet = tweet_list[0]
     latest_bap = tweet.text
 
