@@ -5,9 +5,15 @@
     "consumer_s": "",
     "token": "",
     "token_s": "",
-    "channels": [
+    "live_scores_channels": [
         "",
+        ""
+    ],
+    "team_news_channels": [
         "",
+        ""
+    ],
+    "stats_channels": [
         "..."
     ]
 }
