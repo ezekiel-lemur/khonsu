@@ -99,6 +99,7 @@ async def task():
 
 async def send_file(chan, fileName, retry_count):
     try:
+        await asyncio.sleep(5)
         await bot.send_file(chan, fileName)
         return fileName
     except Exception as e:
@@ -143,7 +144,7 @@ async def send_tweet(tweet):
     is_Goal = re.search('Goal', latest, re.M)
     is_Assist = re.search('Assist', latest, re.M)
     is_red =  re.search('RED', latest, re.M)
-    is_Red = re.search('Red card for', latest, re.M)
+    is_Red = re.search('Red card', latest, re.M)
     is_scout = re.search('scout', latest, re.M|re.I)
     is_baps = re.search('BONUS', latest, re.M)
     is_prov = re.search('STANDS', latest, re.M)
