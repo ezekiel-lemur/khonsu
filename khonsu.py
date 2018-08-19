@@ -79,13 +79,13 @@ async def task():
 
     print("Ready.")
     if last_tweet_used_id is None:
-        last_tweet_used_id = api.user_timeline(id=fpl,count=1,page=1)[0].id
+        last_tweet_used_id = api.user_timeline(id=fpl,count=1,page=1,include_rts='false',exclude_replies='true')[0].id
 
     if last_tweet_used_sky_id is None:
-        last_tweet_used_sky_id = api.user_timeline(id=sky,count=1,page=1)[0].id
+        last_tweet_used_sky_id = api.user_timeline(id=sky,count=1,page=1,include_rts='false',exclude_replies='true')[0].id
 
     if last_tweet_used_bap_id is None:
-        last_tweet_used_bap_id = api.user_timeline(id=bap,count=1,page=1)[0].id
+        last_tweet_used_bap_id = api.user_timeline(id=bap,count=1,page=1,include_rts='false',exclude_replies='true')[0].id
 
     while True:
         future = asyncio.ensure_future(get_latest_tweets())
@@ -99,7 +99,7 @@ async def task():
 
 async def send_file(chan, fileName, retry_count):
     try:
-        await asyncio.sleep(5)
+        await asyncio.sleep(3)
         await bot.send_file(chan, fileName)
         return fileName
     except Exception as e:
@@ -161,7 +161,7 @@ async def send_tweet(tweet):
 async def get_latest_tweets():
     global last_tweet_used_id
 
-    tweet_list = api.user_timeline(id=fpl,count=20,page=1,tweet_mode='extended',since_id=last_tweet_used_id)
+    tweet_list = api.user_timeline(id=fpl,count=20,page=1,tweet_mode='extended',include_rts='false',exclude_replies='true',since_id=last_tweet_used_id)
 
     for tweet in tweet_list:
         if (tweet.id > last_tweet_used_id):
@@ -190,7 +190,7 @@ async def send_tweet_sky(tweet):
 async def get_latest_tweets_sky():
     global last_tweet_used_sky_id
 
-    tweet_list = api.user_timeline(id=sky,count=20,page=1,tweet_mode='extended',since_id=last_tweet_used_sky_id)
+    tweet_list = api.user_timeline(id=sky,count=20,page=1,tweet_mode='extended',include_rts='false',exclude_replies='true',since_id=last_tweet_used_sky_id)
 
     for tweet in tweet_list:
         if (tweet.id > last_tweet_used_sky_id):
@@ -241,7 +241,7 @@ async def send_tweet_bap(tweet):
 async def get_latest_tweets_bap():
     global last_tweet_used_bap_id
 
-    tweet_list = api.user_timeline(id=bap,count=20,page=1,tweet_mode='extended',since_id=last_tweet_used_bap_id)
+    tweet_list = api.user_timeline(id=bap,count=20,page=1,tweet_mode='extended',include_rts='false',exclude_replies='true',since_id=last_tweet_used_bap_id)
 
     for tweet in tweet_list:
         if (tweet.id > last_tweet_used_bap_id):
