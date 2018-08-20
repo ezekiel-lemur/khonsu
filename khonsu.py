@@ -79,13 +79,13 @@ async def task():
 
     print("Ready.")
     if last_tweet_used_id is None:
-        last_tweet_used_id = api.user_timeline(id=fpl,count=1,page=1,include_rts='false',exclude_replies='true')[0].id
+        last_tweet_used_id = api.user_timeline(id=fpl,count=1,page=1,include_rts='false')[0].id
 
     if last_tweet_used_sky_id is None:
-        last_tweet_used_sky_id = api.user_timeline(id=sky,count=1,page=1,include_rts='false',exclude_replies='true')[0].id
+        last_tweet_used_sky_id = api.user_timeline(id=sky,count=1,page=1,include_rts='false')[0].id
 
     if last_tweet_used_bap_id is None:
-        last_tweet_used_bap_id = api.user_timeline(id=bap,count=1,page=1,include_rts='false',exclude_replies='true')[0].id
+        last_tweet_used_bap_id = api.user_timeline(id=bap,count=1,page=1,include_rts='false')[0].id
 
     while True:
         future = asyncio.ensure_future(get_latest_tweets())
@@ -141,8 +141,6 @@ async def send_tweet(tweet):
     latest = tweet.full_text
     is_goal = re.search('GOAL', latest, re.M)
     is_assist = re.search('ASSIST', latest, re.M)
-    is_Goal = re.search('Goal', latest, re.M)
-    is_Assist = re.search('Assist', latest, re.M)
     is_red =  re.search('RED', latest, re.M)
     is_Red = re.search('Red card', latest, re.M)
     is_scout = re.search('scout', latest, re.M|re.I)
@@ -150,7 +148,7 @@ async def send_tweet(tweet):
     is_prov = re.search('STANDS', latest, re.M)
     is_pen = re.search('Penalty miss', latest, re.M)
 
-    if (((is_goal and is_assist) or (is_Goal and is_Assist) or is_red or is_Red or is_pen or (is_baps and is_prov)) and not is_scout):
+    if (((is_goal and is_assist) or is_red or is_Red or is_pen or (is_baps and is_prov)) and not is_scout):
         print("Reached")
         for chan in live_scores_channel:
             embed_ = discord.Embed (description = latest)
@@ -161,7 +159,7 @@ async def send_tweet(tweet):
 async def get_latest_tweets():
     global last_tweet_used_id
 
-    tweet_list = api.user_timeline(id=fpl,count=20,page=1,tweet_mode='extended',include_rts='false',exclude_replies='true',since_id=last_tweet_used_id)
+    tweet_list = api.user_timeline(id=fpl,count=20,page=1,tweet_mode='extended',include_rts='false',since_id=last_tweet_used_id)
 
     for tweet in tweet_list:
         if (tweet.id > last_tweet_used_id):
@@ -190,7 +188,7 @@ async def send_tweet_sky(tweet):
 async def get_latest_tweets_sky():
     global last_tweet_used_sky_id
 
-    tweet_list = api.user_timeline(id=sky,count=20,page=1,tweet_mode='extended',include_rts='false',exclude_replies='true',since_id=last_tweet_used_sky_id)
+    tweet_list = api.user_timeline(id=sky,count=20,page=1,tweet_mode='extended',include_rts='false',since_id=last_tweet_used_sky_id)
 
     for tweet in tweet_list:
         if (tweet.id > last_tweet_used_sky_id):
@@ -241,7 +239,7 @@ async def send_tweet_bap(tweet):
 async def get_latest_tweets_bap():
     global last_tweet_used_bap_id
 
-    tweet_list = api.user_timeline(id=bap,count=20,page=1,tweet_mode='extended',include_rts='false',exclude_replies='true',since_id=last_tweet_used_bap_id)
+    tweet_list = api.user_timeline(id=bap,count=20,page=1,tweet_mode='extended',include_rts='false',since_id=last_tweet_used_bap_id)
 
     for tweet in tweet_list:
         if (tweet.id > last_tweet_used_bap_id):
