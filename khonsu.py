@@ -143,7 +143,7 @@ async def send_tweet(tweet):
     is_Goal = re.search('Goal', latest, re.M)
     is_assist = re.search('ASSIST', latest, re.M)
     is_Assist = re.search('Assist', latest, re.M)
-    is_red =  re.search('RED', latest, re.M)
+    is_red =  re.search('RED CARD', latest, re.M)
     is_Red = re.search('Red card', latest, re.M)
     is_scout = re.search('scout', latest, re.M|re.I)
     is_baps = re.search('BONUS', latest, re.M)
@@ -228,9 +228,8 @@ async def send_tweet_bap(tweet):
         is_Mod = re.search('Modified', latest_bap, re.M)
         is_prov = re.search('Provisional Bonus', latest_bap, re.M)
         is_confirmed = re.search('Confirmed Bonus', latest_bap, re.M)
-        is_Avg = re.search('Averages', latest_bap, re.M)
 
-        if (is_Pen or is_Goal or is_Red or is_Mod or is_prov or is_confirmed or is_Avg):
+        if (is_Pen or is_Goal or is_Red or is_Mod or is_prov or is_confirmed):
             print("got points/baps")
             for chan in live_scores_channel:
                 embed_ = discord.Embed (description = latest_bap)
