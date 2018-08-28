@@ -107,7 +107,7 @@ async def send_file(chan, fileName, retry_count):
             await asyncio.sleep(1)
             return await send_file(chan, fileName, retry_count + 1)
         else:
-            os.remove(fileName)
+            #os.remove(fileName)
             raise e
 
 
@@ -143,14 +143,13 @@ async def send_tweet(tweet):
     is_Goal = re.search('Goal', latest, re.M)
     is_assist = re.search('ASSIST', latest, re.M)
     is_Assist = re.search('Assist', latest, re.M)
-    is_red =  re.search('RED CARD', latest, re.M)
-    is_Red = re.search('Red card', latest, re.M)
+    is_Red = re.search('Red card', latest, re.M|re.I)
     is_scout = re.search('scout', latest, re.M|re.I)
     is_baps = re.search('BONUS', latest, re.M)
     is_prov = re.search('STANDS', latest, re.M)
     is_pen = re.search('Penalty miss', latest, re.M)
 
-    if (((is_goal and is_assist) or (is_Goal and is_Assist) or is_red or is_Red or is_pen or (is_baps and is_prov)) and not is_scout):
+    if (((is_goal and is_assist) or (is_Goal and is_Assist) or is_Red or is_pen or (is_baps and is_prov)) and not is_scout):
         print("Reached")
         for chan in live_scores_channel:
             embed_ = discord.Embed (description = latest)
@@ -178,8 +177,9 @@ async def send_tweet_sky(tweet):
     is_team_news = re.search('team v', latest_sky, re.M)
     is_xi_v = re.search('XI v', latest_sky, re.M)
     is_xi_face = re.search('XI to face', latest_sky, re.M)
+    is_xi_play = re.search('XI to play', latest_sky, re.M)
 
-    if (is_team_news or is_xi_v or is_xi_face):
+    if (is_team_news or is_xi_v or is_xi_face or is_xi_play):
         print("got team news")
         for chan in team_news_channel:
             embed_ = discord.Embed (description = latest_sky)
