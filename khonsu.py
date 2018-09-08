@@ -174,14 +174,15 @@ async def get_latest_tweets():
 
 async def send_tweet_sky(tweet):
     latest_sky = tweet.full_text
-    is_team_news = re.search('^|\s([^,]+,){10}[^.]+\.', latest_sky, re.M|re.I)
+    is_team_news = re.search('(^|\s)([^,]+,){10}[^.]+\.', latest_sky, re.M|re.I)
 
     if (is_team_news):
         print("got team news")
         for chan in team_news_channel:
-            embed_ = discord.Embed (description = latest_sky)
-            future = asyncio.ensure_future(send_message(chan, embed_, 0))
-            future.add_done_callback(mesg_callback)
+            print(latest_sky)
+            #embed_ = discord.Embed (description = latest_sky)
+            #future = asyncio.ensure_future(send_message(chan, embed_, 0))
+            #future.add_done_callback(mesg_callback)
 
 
 async def get_latest_tweets_sky():
