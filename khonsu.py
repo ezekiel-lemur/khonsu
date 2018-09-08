@@ -179,10 +179,9 @@ async def send_tweet_sky(tweet):
     if (is_team_news):
         print("got team news")
         for chan in team_news_channel:
-            print(latest_sky)
-            #embed_ = discord.Embed (description = latest_sky)
-            #future = asyncio.ensure_future(send_message(chan, embed_, 0))
-            #future.add_done_callback(mesg_callback)
+            embed_ = discord.Embed (description = latest_sky)
+            future = asyncio.ensure_future(send_message(chan, embed_, 0))
+            future.add_done_callback(mesg_callback)
 
 
 async def get_latest_tweets_sky():
