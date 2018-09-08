@@ -174,14 +174,9 @@ async def get_latest_tweets():
 
 async def send_tweet_sky(tweet):
     latest_sky = tweet.full_text
-    is_team_news = re.search('team v', latest_sky, re.M)
-    is_xi_v = re.search('XI v', latest_sky, re.M)
-    is_xi_face = re.search('XI to face', latest_sky, re.M)
-    is_xi_play = re.search('XI to play', latest_sky, re.M)
-    is_team_face = re.search('team to face', latest_sky, re.M)
-    is_team_play = re.search('team to play', latest_sky, re.M)
+    is_team_news = re.search('^|\s([^,]+,){10}[^.]+\.', latest_sky, re.M|re.I)
 
-    if (is_team_news or is_xi_v or is_xi_face or is_xi_play or is_team_face or is_team_play):
+    if (is_team_news):
         print("got team news")
         for chan in team_news_channel:
             embed_ = discord.Embed (description = latest_sky)
