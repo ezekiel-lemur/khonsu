@@ -3,11 +3,16 @@ import logging
 import asyncio
 import json
 import tweepy
-from time import sleep
+from socket import AF_INET, SOCK_DGRAM, socket
+from struct import unpack
+from datetime import datetime, timezone
+from time import ctime, sleep
 import re
 import threading
 import wget
+import requests
 import os
+import httpx
 
 logging.basicConfig (level = logging.INFO)
 
@@ -29,17 +34,21 @@ auth.secure = True
 api = tweepy.API(auth)
 
 live_scores_channel = list()
+price_changes_channel = list()
 team_news_channel = list()
 stats_channel = list()
 
 fpl = config['twitter_id']#add any twitter accounts id here
-sky = config['twitter_id_2']
-bap = config['twitter_id_3']
+bap = config['twitter_id_2']
+team_ids = config['team_twitter_ids']
 
 last_tweet_used_id = None
-last_tweet_used_sky_id = None
 last_tweet_used_bap_id = None
 
+REF_TIME_1970=2208988800
+
+client = socket(AF_INET, SOCK_DGRAM)
+data = b'\x1b' + 47 * b'\0'
 
 def tweet_callback(fut):
     try:
@@ -48,8 +57,33 @@ def tweet_callback(fut):
         print("Error processing tweets: {}".format(e))
 
 
+def fixtures_callback(fut):
+    global fixtures
+
+    try:
+        fixtures = fut.result()
+    except Exception as e:
+        print("Error getting fixtures: {}".format(e))
+    
+    
+def latest_time_callback(fut):
+    global latest_time, fixtures
+
+    try:
+        latest_time = fut.result()
+
+        if (latest_time is not None and latest_time.hour == 0 and latest_time.minute == 0 and latest_time.seconds < 5):
+            futurefixtures = asyncio.ensure_future(get_latest_fixtures())
+            futurefixtures.add_done_callback(fixtures_callback)
+        else:
+            print(latest_time)
+
+    except Exception as e:
+        print("Error getting latest time: {}".format(e))
+
+
 async def task():
-    global channel, fpl, sky, bap, last_tweet_used_id, last_tweet_used_sky_id, last_tweet_used_bap_id
+    global channel, fpl, bap, last_tweet_used_id, last_tweet_used_bap_id, fixtures
 
     await bot.wait_until_ready()
 
@@ -58,6 +92,14 @@ async def task():
         if c is not None:
             live_scores_channel.append(c)
             print('Added {}@{} for live scores'.format(c.name, 'FantasyPL'))
+        else:
+            print('Couldn\'t find channel {}'.format(chan))
+
+    for chan in config['price_changes_channels']:
+        c = bot.get_channel(chan)
+        if c is not None:
+            price_changes_channel.append(c)
+            print('Added {}@{} for price changes'.format(c.name, 'FantasyPL'))
         else:
             print('Couldn\'t find channel {}'.format(chan))
 
@@ -81,20 +123,53 @@ async def task():
     if last_tweet_used_id is None:
         last_tweet_used_id = api.user_timeline(id=fpl,count=1,page=1,include_rts='false')[0].id
 
-    if last_tweet_used_sky_id is None:
-        last_tweet_used_sky_id = api.user_timeline(id=sky,count=1,page=1,include_rts='false')[0].id
-
     if last_tweet_used_bap_id is None:
         last_tweet_used_bap_id = api.user_timeline(id=bap,count=1,page=1,include_rts='false')[0].id
 
+    fixtures = await get_latest_fixtures()
+
     while True:
+        futuretime = asyncio.ensure_future(get_latest_time())
+        futuretime.add_done_callback(latest_time_callback)
+
         future = asyncio.ensure_future(get_latest_tweets())
         future.add_done_callback(tweet_callback)
-        futuresky = asyncio.ensure_future(get_latest_tweets_sky())
-        futuresky.add_done_callback(tweet_callback)
         futurebap = asyncio.ensure_future(get_latest_tweets_bap())
         futurebap.add_done_callback(tweet_callback)
+
         await asyncio.sleep(5)
+
+
+async def get_latest_fixtures():
+    fixtures_dict = list()
+    async with httpx.AsyncClient() as async_client:
+        r = (await async_client.get('https://fantasy.premierleague.com/api/bootstrap-static/#/')).json()
+        events = r['events']
+        teams = r['teams']
+        for event in events:
+            if (event['finished'] == False):
+                fixtures_r = (await async_client.get('https://fantasy.premierleague.com/api/fixtures/?event={}#/'.format(event['id']))).json()
+                for match in fixtures_r:
+                    if (match['started'] == False):
+                        for team in teams:
+                            if (team['id'] == match['team_h']):
+                                team_h = team['short_name']
+                            if (team['id'] == match['team_a']):
+                                team_a = team['short_name']
+
+                        fixtures_dict.append((team_ids[team_h], team_ids[team_a], datetime.strptime(match['kickoff_time'], '%Y-%m-%dT%H:%M:%SZ')))
+
+                return fixtures_dict
+
+async def get_latest_time():
+    await bot.loop.sock_connect(client, ('0.de.pool.ntp.org', 123))
+    await bot.loop.sock_sendall(client, data)
+    recv_data = await bot.loop.sock_recv(client, 1024)
+    if recv_data:
+        t = unpack('!12I', recv_data)[10]
+        t -= REF_TIME_1970
+
+    return datetime.fromtimestamp(t, timezone.utc)
 
 
 async def send_file(chan, fileName, retry_count):
@@ -170,34 +245,7 @@ async def get_latest_tweets():
 
     return tweet_list
 
-#get team news from seperate account
-
-async def send_tweet_sky(tweet):
-    latest_sky = tweet.full_text
-    is_team_news = re.search('(^|\s)([^,]+,){10}[^.]+\.', latest_sky, re.M|re.I)
-
-    if (is_team_news):
-        print("got team news")
-        for chan in team_news_channel:
-            embed_ = discord.Embed (description = latest_sky)
-            future = asyncio.ensure_future(send_message(chan, embed_, 0))
-            future.add_done_callback(mesg_callback)
-
-
-async def get_latest_tweets_sky():
-    global last_tweet_used_sky_id
-
-    tweet_list = api.user_timeline(id=sky,count=20,page=1,tweet_mode='extended',include_rts='false',since_id=last_tweet_used_sky_id)
-
-    for tweet in tweet_list:
-        if (tweet.id > last_tweet_used_sky_id):
-            last_tweet_used_sky_id = tweet.id
-
-        await send_tweet_sky(tweet)
-
-    return tweet_list
-
-#get points/provisional/confirmed baps from separate account
+#get teams/points/provisional/confirmed baps from separate account
 
 async def send_tweet_bap(tweet):
     latest_bap = tweet.full_text
@@ -225,14 +273,22 @@ async def send_tweet_bap(tweet):
         is_Mod = re.search('Modified', latest_bap, re.M)
         is_prov = re.search('Provisional Bonus', latest_bap, re.M)
         is_confirmed = re.search('Confirmed Bonus', latest_bap, re.M)
+        is_Rises = re.search('Price Rises', latest_bap, re.M)
+        is_Falls = re.search('Price Falls', latest_bap, re.M)
 
         if (is_Pen or is_Goal or is_Red or is_Mod or is_prov or is_confirmed):
-            print("got points/baps")
+            print("got points/baps or price rises/falls")
             for chan in live_scores_channel:
                 embed_ = discord.Embed (description = latest_bap)
                 future = asyncio.ensure_future(send_message(chan, embed_, 0))
                 future.add_done_callback(mesg_callback)
-
+        
+        if (is_Rises or is_Falls):
+            print("got price rises/falls")
+            for chan in price_changes_channel:
+                embed_ = discord.Embed (description = latest_bap)
+                future = asyncio.ensure_future(send_message(chan, embed_, 0))
+                future.add_done_callback(mesg_callback)
 
 async def get_latest_tweets_bap():
     global last_tweet_used_bap_id
@@ -274,8 +330,6 @@ while True:
             tweet = api.get_status(int(m.content),tweet_mode='extended')
             if tweet.user.id_str == fpl:
                 await send_tweet(tweet)
-            elif tweet.user.id_str == sky:
-                await send_tweet_sky(tweet)
             elif tweet.user.id_str == bap:
                 await send_tweet_bap(tweet)
 
