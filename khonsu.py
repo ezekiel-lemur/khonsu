@@ -5,7 +5,7 @@ import json
 import tweepy
 from socket import AF_INET, SOCK_DGRAM, socket
 from struct import unpack
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from time import ctime, sleep
 import re
 import threading
@@ -40,7 +40,7 @@ stats_channel = list()
 
 fpl = config['twitter_id']#add any twitter accounts id here
 bap = config['twitter_id_2']
-team_ids = config['team_twitter_ids']
+team_twitter_ids = config['team_twitter_ids']
 
 last_tweet_used_id = None
 last_tweet_used_bap_id = None
@@ -49,6 +49,8 @@ REF_TIME_1970=2208988800
 
 client = socket(AF_INET, SOCK_DGRAM)
 data = b'\x1b' + 47 * b'\0'
+
+watch_time_adjustment = timedelta(hours=1) - timedelta(seconds=30)
 
 def tweet_callback(fut):
     try:
@@ -66,6 +68,14 @@ def fixtures_callback(fut):
         print("Error getting fixtures: {}".format(e))
     
     
+def file_callback(fut):
+    try:
+        fileName = fut.result()
+        os.remove(fileName)
+    except Exception as e:
+        print("Error sending file: {}".format(e))
+
+
 def latest_time_callback(fut):
     global latest_time, fixtures
 
@@ -76,7 +86,30 @@ def latest_time_callback(fut):
             futurefixtures = asyncio.ensure_future(get_latest_fixtures())
             futurefixtures.add_done_callback(fixtures_callback)
         else:
-            print(latest_time)
+            next_watch_time = None
+            twitter_ids = None
+
+            for watch_time in sorted(fixtures):
+                if (watch_time < latest_time):
+                    del fixtures[watch_time]
+                else:
+                    next_watch_time = watch_time - timedelta(minutes=1)
+                    twitter_ids = fixtures[watch_time]
+                    break
+
+            if next_watch_time is not None and latest_time >= next_watch_time:
+                for twitter_id in reversed(twitter_ids):
+                    tweet = api.user_timeline(id=twitter_id,count=1,page=1,tweet_mode='extended',include_rts='false')[0]
+                    created_at = tweet.created_at.replace(tzinfo=timezone.utc)
+                    if (created_at >= next_watch_time):
+                        twitter_ids.remove(twitter_id)
+                        media = tweet.extended_entities.get('media', [])
+                        for chan in team_news_channel:
+                            for entity in media:
+                                fileName = wget.download(entity['media_url'])
+                            
+                                future = asyncio.ensure_future(send_file(chan, fileName, 0))
+                                future.add_done_callback(file_callback)
 
     except Exception as e:
         print("Error getting latest time: {}".format(e))
@@ -141,7 +174,7 @@ async def task():
 
 
 async def get_latest_fixtures():
-    fixtures_dict = list()
+    fixtures_dict = {}
     async with httpx.AsyncClient() as async_client:
         r = (await async_client.get('https://fantasy.premierleague.com/api/bootstrap-static/#/')).json()
         events = r['events']
@@ -151,17 +184,21 @@ async def get_latest_fixtures():
                 fixtures_r = (await async_client.get('https://fantasy.premierleague.com/api/fixtures/?event={}#/'.format(event['id']))).json()
                 for match in fixtures_r:
                     if (match['started'] == False):
+                        kickoff_time = match['kickoff_time']
+                        watch_time_dt = datetime.strptime(kickoff_time, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc) - watch_time_adjustment
+                        if (watch_time_dt not in fixtures_dict):
+                            fixtures_dict[watch_time_dt] = []
+
                         for team in teams:
                             if (team['id'] == match['team_h']):
-                                team_h = team['short_name']
-                            if (team['id'] == match['team_a']):
-                                team_a = team['short_name']
+                                fixtures_dict[watch_time_dt].append(team_twitter_ids[team['short_name']])
 
-                        fixtures_dict.append((team_ids[team_h], team_ids[team_a], datetime.strptime(match['kickoff_time'], '%Y-%m-%dT%H:%M:%SZ')))
+                            if (team['id'] == match['team_a']):
+                                fixtures_dict[watch_time_dt].append(team_twitter_ids[team['short_name']])
 
                 return fixtures_dict
 
-            
+
 async def get_latest_time():
     await bot.loop.sock_connect(client, ('0.de.pool.ntp.org', 123))
     await bot.loop.sock_sendall(client, data)
@@ -203,14 +240,6 @@ def mesg_callback(fut):
         mesg = fut.result()
     except Exception as e:
         print("Error sending message: {}".format(e))
-
-
-def file_callback(fut):
-    try:
-        fileName = fut.result()
-        os.remove(fileName)
-    except Exception as e:
-        print("Error sending file: {}".format(e))
 
 
 async def send_tweet(tweet):
