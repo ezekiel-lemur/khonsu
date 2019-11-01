@@ -161,6 +161,7 @@ async def get_latest_fixtures():
 
                 return fixtures_dict
 
+            
 async def get_latest_time():
     await bot.loop.sock_connect(client, ('0.de.pool.ntp.org', 123))
     await bot.loop.sock_sendall(client, data)
