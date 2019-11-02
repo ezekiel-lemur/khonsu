@@ -9,10 +9,10 @@ from datetime import datetime, timezone, timedelta
 from time import ctime, sleep
 import re
 import threading
-import wget
-import requests
 import os
+import posixpath
 import httpx
+from urllib.parse import urlsplit, unquote
 
 logging.basicConfig (level = logging.INFO)
 
@@ -50,73 +50,10 @@ REF_TIME_1970=2208988800
 client = socket(AF_INET, SOCK_DGRAM)
 data = b'\x1b' + 47 * b'\0'
 
-watch_time_adjustment = timedelta(hours=1) - timedelta(seconds=30)
-
-def tweet_callback(fut):
-    try:
-        tweet_list = fut.result()
-    except Exception as e:
-        print("Error processing tweets: {}".format(e))
-
-
-def fixtures_callback(fut):
-    global fixtures
-
-    try:
-        fixtures = fut.result()
-    except Exception as e:
-        print("Error getting fixtures: {}".format(e))
-    
-    
-def file_callback(fut):
-    try:
-        fileName = fut.result()
-        os.remove(fileName)
-    except Exception as e:
-        print("Error sending file: {}".format(e))
-
-
-def latest_time_callback(fut):
-    global latest_time, fixtures
-
-    try:
-        latest_time = fut.result()
-
-        if (latest_time is not None and latest_time.hour == 0 and latest_time.minute == 0 and latest_time.seconds < 5):
-            futurefixtures = asyncio.ensure_future(get_latest_fixtures())
-            futurefixtures.add_done_callback(fixtures_callback)
-        else:
-            next_watch_time = None
-            twitter_ids = None
-
-            for watch_time in sorted(fixtures):
-                if (watch_time < latest_time):
-                    del fixtures[watch_time]
-                else:
-                    next_watch_time = watch_time - timedelta(minutes=1)
-                    twitter_ids = fixtures[watch_time]
-                    break
-
-            if next_watch_time is not None and latest_time >= next_watch_time:
-                for twitter_id in reversed(twitter_ids):
-                    tweet = api.user_timeline(id=twitter_id,count=1,page=1,tweet_mode='extended',include_rts='false')[0]
-                    created_at = tweet.created_at.replace(tzinfo=timezone.utc)
-                    if (created_at >= next_watch_time):
-                        twitter_ids.remove(twitter_id)
-                        media = tweet.extended_entities.get('media', [])
-                        for chan in team_news_channel:
-                            for entity in media:
-                                fileName = wget.download(entity['media_url'])
-                            
-                                future = asyncio.ensure_future(send_file(chan, fileName, 0))
-                                future.add_done_callback(file_callback)
-
-    except Exception as e:
-        print("Error getting latest time: {}".format(e))
-
+watch_time_adjustment = timedelta(hours=1) - timedelta(minutes=10)
 
 async def task():
-    global channel, fpl, bap, last_tweet_used_id, last_tweet_used_bap_id, fixtures
+    global channel, fpl, bap, last_tweet_used_id, last_tweet_used_bap_id, fixtures, latest_time
 
     await bot.wait_until_ready()
 
@@ -162,15 +99,14 @@ async def task():
     fixtures = await get_latest_fixtures()
 
     while True:
-        futuretime = asyncio.ensure_future(get_latest_time())
-        futuretime.add_done_callback(latest_time_callback)
+        latest_time = datetime.now(timezone.utc)
 
-        future = asyncio.ensure_future(get_latest_tweets())
-        future.add_done_callback(tweet_callback)
-        futurebap = asyncio.ensure_future(get_latest_tweets_bap())
-        futurebap.add_done_callback(tweet_callback)
-
-        await asyncio.sleep(5)
+        await asyncio.gather(
+            get_latest_team_tweets(),
+            get_latest_tweets(),
+            get_latest_tweets_bap(),
+            asyncio.sleep(5)
+        )
 
 
 async def get_latest_fixtures():
@@ -210,18 +146,68 @@ async def get_latest_time():
     return datetime.fromtimestamp(t, timezone.utc)
 
 
-async def send_file(chan, fileName, retry_count):
+def url2filename(url):
+    urlpath = urlsplit(url).path
+    return posixpath.basename(unquote(urlpath))
+
+
+async def send_url(chan, url, retry_count):
     try:
-        await asyncio.sleep(3)
-        await bot.send_file(chan, fileName)
-        return fileName
+        fileName = url2filename(url)
+
+        async with httpx.AsyncClient() as async_client:
+            r = await async_client.get(url)
+
+            with open(fileName, 'wb') as file:
+                file.write(r.content)
+
+            await bot.send_file(chan, fileName)
+            os.remove(fileName)
     except Exception as e:
         if (retry_count < 5):
             await asyncio.sleep(1)
-            return await send_file(chan, fileName, retry_count + 1)
+            return await send_url(chan, url, retry_count + 1)
         else:
-            #os.remove(fileName)
             raise e
+
+
+async def send_picture_tweet(tweet, channel):
+    media = tweet.extended_entities.get('media', [])
+    send_promises = []
+    for chan in channel:
+        for entity in media:
+            send_promises.append(send_url(chan, entity['media_url'], 0))
+
+    await asyncio.gather(*send_promises)
+
+
+async def get_latest_team_tweets():
+    global fixtures, latest_time
+
+    if (latest_time is not None and latest_time.hour == 0 and latest_time.minute == 0 and latest_time.seconds < 5):
+        fixtures = await get_latest_fixtures()
+
+    next_watch_time = None
+    twitter_ids = None
+
+    for watch_time in sorted(fixtures):
+        if (watch_time < latest_time):
+            del fixtures[watch_time]
+        else:
+            next_watch_time = watch_time - timedelta(minutes=12)
+            twitter_ids = fixtures[watch_time]
+            break
+
+    if next_watch_time is not None and latest_time >= next_watch_time:
+        send_promises = []
+        for twitter_id in reversed(twitter_ids):
+            tweet = api.user_timeline(id=twitter_id,count=1,page=1,tweet_mode='extended',include_rts='false')[0]
+            created_at = tweet.created_at.replace(tzinfo=timezone.utc)
+            if (created_at >= next_watch_time):
+                twitter_ids.remove(twitter_id)
+                send_promises.append(send_picture_tweet(tweet, team_news_channel))
+
+        await asyncio.gather(*send_promises)
 
 
 async def send_message(chan, embed_, retry_count):
@@ -233,13 +219,6 @@ async def send_message(chan, embed_, retry_count):
             return await send_message(chan, embed_, retry_count + 1)
         else:
             raise e
-
-
-def mesg_callback(fut):
-    try:
-        mesg = fut.result()
-    except Exception as e:
-        print("Error sending message: {}".format(e))
 
 
 async def send_tweet(tweet):
@@ -255,11 +234,13 @@ async def send_tweet(tweet):
     is_pen = re.search('Penalty miss', latest, re.M)
 
     if (((is_goal and is_assist) or (is_Goal and is_Assist) or is_Red or is_pen or (is_baps and is_prov)) and not is_scout):
-        print("Reached")
+        print("FPL Update")
+        chan_promises = []
         for chan in live_scores_channel:
             embed_ = discord.Embed (description = latest)
-            future = asyncio.ensure_future(send_message(chan, embed_, 0))
-            future.add_done_callback(mesg_callback)
+            chan_promises.append(send_message(chan, embed_, 0))
+
+        asyncio.gather(*chan_promises)
 
 
 async def get_latest_tweets():
@@ -273,9 +254,6 @@ async def get_latest_tweets():
 
         await send_tweet(tweet)
 
-    return tweet_list
-
-#get teams/points/provisional/confirmed baps from separate account
 
 async def send_tweet_bap(tweet):
     latest_bap = tweet.full_text
@@ -290,12 +268,7 @@ async def send_tweet_bap(tweet):
             print("got stats")
             channel = stats_channel
 
-        for chan in channel:
-            for entity in media:
-                fileName = wget.download(entity['media_url'])
-            
-                future = asyncio.ensure_future(send_file(chan, fileName, 0))
-                future.add_done_callback(file_callback)
+        await send_picture_tweet(tweet, channel)
     else:
         is_Pen = re.search('Penalty', latest_bap, re.M)
         is_Goal = re.search('Goal', latest_bap, re.M)
@@ -306,19 +279,22 @@ async def send_tweet_bap(tweet):
         is_Rises = re.search('Price Rises', latest_bap, re.M)
         is_Falls = re.search('Price Falls', latest_bap, re.M)
 
+        chan_promises = []
+
         if (is_Pen or is_Goal or is_Red or is_Mod or is_prov or is_confirmed):
             print("got points/baps or price rises/falls")
             for chan in live_scores_channel:
                 embed_ = discord.Embed (description = latest_bap)
-                future = asyncio.ensure_future(send_message(chan, embed_, 0))
-                future.add_done_callback(mesg_callback)
-        
+                chan_promises.append(send_message(chan, embed_, 0))
+
         if (is_Rises or is_Falls):
             print("got price rises/falls")
             for chan in price_changes_channel:
                 embed_ = discord.Embed (description = latest_bap)
-                future = asyncio.ensure_future(send_message(chan, embed_, 0))
-                future.add_done_callback(mesg_callback)
+                chan_promises.append(send_message(chan, embed_, 0))
+
+        asyncio.gather(*chan_promises)        
+        
 
 async def get_latest_tweets_bap():
     global last_tweet_used_bap_id
