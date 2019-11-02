@@ -166,7 +166,7 @@ async def send_url(chan, url, retry_count):
     except Exception as e:
         if (retry_count < 5):
             await asyncio.sleep(1)
-            return await send_url(chan, url, retry_count + 1)
+            await send_url(chan, url, retry_count + 1)
         else:
             raise e
 
@@ -187,36 +187,30 @@ async def get_latest_team_tweets():
     if (latest_time is not None and latest_time.hour == 0 and latest_time.minute == 0 and latest_time.seconds < 5):
         fixtures = await get_latest_fixtures()
 
-    next_watch_time = None
-    twitter_ids = None
+    send_promises = []
 
     for watch_time in sorted(fixtures):
-        if (watch_time < latest_time):
+        if (latest_time > watch_time):
             del fixtures[watch_time]
-        else:
-            next_watch_time = watch_time - timedelta(minutes=12)
+        elif latest_time >= watch_time - timedelta(minutes=12):
             twitter_ids = fixtures[watch_time]
-            break
+            for twitter_id in reversed(twitter_ids):
+                tweet = api.user_timeline(id=twitter_id,count=1,page=1,tweet_mode='extended',include_rts='false')[0]
+                created_at = tweet.created_at.replace(tzinfo=timezone.utc)
+                if (created_at >= next_watch_time):
+                    twitter_ids.remove(twitter_id)
+                    send_promises.append(send_picture_tweet(tweet, team_news_channel))
 
-    if next_watch_time is not None and latest_time >= next_watch_time:
-        send_promises = []
-        for twitter_id in reversed(twitter_ids):
-            tweet = api.user_timeline(id=twitter_id,count=1,page=1,tweet_mode='extended',include_rts='false')[0]
-            created_at = tweet.created_at.replace(tzinfo=timezone.utc)
-            if (created_at >= next_watch_time):
-                twitter_ids.remove(twitter_id)
-                send_promises.append(send_picture_tweet(tweet, team_news_channel))
-
-        await asyncio.gather(*send_promises)
+    await asyncio.gather(*send_promises)
 
 
 async def send_message(chan, embed_, retry_count):
     try:
-        return await bot.send_message(chan, embed=embed_)
+        await bot.send_message(chan, embed=embed_)
     except Exception as e:
         if (retry_count < 5):
             await asyncio.sleep(1)
-            return await send_message(chan, embed_, retry_count + 1)
+            await send_message(chan, embed_, retry_count + 1)
         else:
             raise e
 
@@ -240,7 +234,7 @@ async def send_tweet(tweet):
             embed_ = discord.Embed (description = latest)
             chan_promises.append(send_message(chan, embed_, 0))
 
-        asyncio.gather(*chan_promises)
+        await asyncio.gather(*chan_promises)
 
 
 async def get_latest_tweets():
@@ -293,7 +287,7 @@ async def send_tweet_bap(tweet):
                 embed_ = discord.Embed (description = latest_bap)
                 chan_promises.append(send_message(chan, embed_, 0))
 
-        asyncio.gather(*chan_promises)        
+        await asyncio.gather(*chan_promises)        
         
 
 async def get_latest_tweets_bap():
