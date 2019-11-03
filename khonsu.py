@@ -53,7 +53,7 @@ data = b'\x1b' + 47 * b'\0'
 watch_time_adjustment = timedelta(hours=1) - timedelta(minutes=10)
 
 async def task():
-    global channel, fpl, bap, last_tweet_used_id, last_tweet_used_bap_id, fixtures, latest_time
+    global last_tweet_used_id, last_tweet_used_bap_id, latest_time
 
     await bot.wait_until_ready()
 
@@ -89,14 +89,15 @@ async def task():
         else:
             print('Couldn\'t find channel {}'.format(chan))
 
-    print("Ready.")
+    await get_latest_fixtures()
+
     if last_tweet_used_id is None:
         last_tweet_used_id = api.user_timeline(id=fpl,count=1,page=1,include_rts='false')[0].id
 
     if last_tweet_used_bap_id is None:
         last_tweet_used_bap_id = api.user_timeline(id=bap,count=1,page=1,include_rts='false')[0].id
 
-    fixtures = await get_latest_fixtures()
+    print("Ready.")
 
     while True:
         latest_time = datetime.now(timezone.utc)
@@ -110,7 +111,9 @@ async def task():
 
 
 async def get_latest_fixtures():
-    fixtures_dict = {}
+    global fixtures
+
+    fixtures = {}
     async with httpx.AsyncClient() as async_client:
         r = (await async_client.get('https://fantasy.premierleague.com/api/bootstrap-static/#/')).json()
         events = r['events']
@@ -122,17 +125,17 @@ async def get_latest_fixtures():
                     if (match['started'] == False):
                         kickoff_time = match['kickoff_time']
                         watch_time_dt = datetime.strptime(kickoff_time, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc) - watch_time_adjustment
-                        if (watch_time_dt not in fixtures_dict):
-                            fixtures_dict[watch_time_dt] = []
+                        if (watch_time_dt not in fixtures):
+                            fixtures[watch_time_dt] = []
 
                         for team in teams:
                             if (team['id'] == match['team_h']):
-                                fixtures_dict[watch_time_dt].append(team_twitter_ids[team['short_name']])
+                                fixtures[watch_time_dt].append(team_twitter_ids[team['short_name']])
 
                             if (team['id'] == match['team_a']):
-                                fixtures_dict[watch_time_dt].append(team_twitter_ids[team['short_name']])
+                                fixtures[watch_time_dt].append(team_twitter_ids[team['short_name']])
 
-                return fixtures_dict
+                return
 
 
 async def get_latest_time():
@@ -184,8 +187,8 @@ async def send_picture_tweet(tweet, channel):
 async def get_latest_team_tweets():
     global fixtures, latest_time
 
-    if (latest_time is not None and latest_time.hour == 0 and latest_time.minute == 0 and latest_time.seconds < 5):
-        fixtures = await get_latest_fixtures()
+    if (latest_time is not None and latest_time.hour == 0 and latest_time.minute == 0 and latest_time.second < 5):
+        await get_latest_fixtures()
 
     send_promises = []
 
@@ -242,11 +245,13 @@ async def get_latest_tweets():
 
     tweet_list = api.user_timeline(id=fpl,count=20,page=1,tweet_mode='extended',include_rts='false',since_id=last_tweet_used_id)
 
+    tweet_promises = []
     for tweet in tweet_list:
+        tweet_promises.append(send_tweet(tweet))
         if (tweet.id > last_tweet_used_id):
             last_tweet_used_id = tweet.id
 
-        await send_tweet(tweet)
+    await asyncio.gather(*tweet_promises)
 
 
 async def send_tweet_bap(tweet):
@@ -276,7 +281,7 @@ async def send_tweet_bap(tweet):
         chan_promises = []
 
         if (is_Pen or is_Goal or is_Red or is_Mod or is_prov or is_confirmed):
-            print("got points/baps or price rises/falls")
+            print("got points/baps")
             for chan in live_scores_channel:
                 embed_ = discord.Embed (description = latest_bap)
                 chan_promises.append(send_message(chan, embed_, 0))
@@ -295,13 +300,13 @@ async def get_latest_tweets_bap():
 
     tweet_list = api.user_timeline(id=bap,count=20,page=1,tweet_mode='extended',include_rts='false',since_id=last_tweet_used_bap_id)
 
+    tweet_promises = []
     for tweet in tweet_list:
+        tweet_promises.append(send_tweet_bap(tweet))
         if (tweet.id > last_tweet_used_bap_id):
             last_tweet_used_bap_id = tweet.id
 
-        await send_tweet_bap(tweet)
-
-    return tweet_list
+    await asyncio.gather(*tweet_promises)
 
 
 def handle_exit():
