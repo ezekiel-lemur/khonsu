@@ -9,10 +9,10 @@ from datetime import datetime, timezone, timedelta
 from time import ctime, sleep
 import re
 import threading
-import os
 import posixpath
 import httpx
 from urllib.parse import urlsplit, unquote
+from io import BytesIO
 
 logging.basicConfig (level = logging.INFO)
 
@@ -53,7 +53,7 @@ data = b'\x1b' + 47 * b'\0'
 watch_time_adjustment = timedelta(hours=1) - timedelta(minutes=10)
 
 async def task():
-    global last_tweet_used_id, last_tweet_used_bap_id, latest_time
+    global last_tweet_used_id, last_tweet_used_bap_id
 
     await bot.wait_until_ready()
 
@@ -100,8 +100,6 @@ async def task():
     print("Ready.")
 
     while True:
-        latest_time = datetime.now(timezone.utc)
-
         await asyncio.gather(
             get_latest_team_tweets(),
             get_latest_tweets(),
@@ -156,16 +154,10 @@ def url2filename(url):
 
 async def send_url(chan, url, retry_count):
     try:
-        fileName = url2filename(url)
-
         async with httpx.AsyncClient() as async_client:
             r = await async_client.get(url)
 
-            with open(fileName, 'wb') as file:
-                file.write(r.content)
-
-            await bot.send_file(chan, fileName)
-            os.remove(fileName)
+            await bot.send_file(chan, fp=BytesIO(await r.read()), filename=url2filename(url))
     except Exception as e:
         if (retry_count < 5):
             await asyncio.sleep(1)
@@ -185,9 +177,11 @@ async def send_picture_tweet(tweet, channel):
 
 
 async def get_latest_team_tweets():
-    global fixtures, latest_time
+    global fixtures
 
-    if (latest_time is not None and latest_time.hour == 0 and latest_time.minute == 0 and latest_time.second < 5):
+    latest_time = datetime.now(timezone.utc)
+
+    if (latest_time is not None and latest_time.hour == 0 and latest_time.minute == 0 and latest_time.second <= 5):
         await get_latest_fixtures()
 
     send_promises = []
@@ -200,7 +194,7 @@ async def get_latest_team_tweets():
             for twitter_id in reversed(twitter_ids):
                 tweet = api.user_timeline(id=twitter_id,count=1,page=1,tweet_mode='extended',include_rts='false')[0]
                 created_at = tweet.created_at.replace(tzinfo=timezone.utc)
-                if (created_at >= next_watch_time):
+                if (created_at >= watch_time - timedelta(minutes=12)):
                     twitter_ids.remove(twitter_id)
                     send_promises.append(send_picture_tweet(tweet, team_news_channel))
 
