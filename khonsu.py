@@ -157,7 +157,7 @@ async def send_url(chan, url, retry_count):
         async with httpx.AsyncClient() as async_client:
             r = await async_client.get(url)
 
-            await bot.send_file(chan, fp=BytesIO(await r.read()), filename=url2filename(url))
+            await chan.send(file=discord.File(BytesIO(await r.read()), filename=url2filename(url)))
     except Exception as e:
         if (retry_count < 5):
             await asyncio.sleep(1)
@@ -203,7 +203,7 @@ async def get_latest_team_tweets():
 
 async def send_message(chan, embed_, retry_count):
     try:
-        await bot.send_message(chan, embed=embed_)
+        await chan.send(embed=embed_)
     except Exception as e:
         if (retry_count < 5):
             await asyncio.sleep(1)
@@ -303,29 +303,10 @@ async def get_latest_tweets_bap():
     await asyncio.gather(*tweet_promises)
 
 
-def handle_exit():
-    print("Handling")
-    bot.loop.run_until_complete(bot.logout())
-    for t in asyncio.Task.all_tasks(loop=bot.loop):
-        if t.done():
-            t.exception()
-            continue
-        t.cancel()
-        try:
-            bot.loop.run_until_complete(asyncio.wait_for(t, 5, loop=bot.loop))
-            t.exception()
-        except asyncio.InvalidStateError:
-            pass
-        except asyncio.TimeoutError:
-            pass
-        except asyncio.CancelledError:
-            pass
-
-
 while True:
     @bot.event
     async def on_message(m):
-        if m.channel.is_private:
+        if isinstance(m.channel, discord.DMChannel):
             tweet = api.get_status(int(m.content),tweet_mode='extended')
             if tweet.user.id_str == fpl:
                 await send_tweet(tweet)
@@ -333,12 +314,4 @@ while True:
                 await send_tweet_bap(tweet)
 
     bot.loop.create_task(task())
-    try:
-        bot.loop.run_until_complete(bot.start(config['discord_token']))
-    except SystemExit:
-        handle_exit()
-    except KeyboardInterrupt:
-        handle_exit()
-        bot.loop.close()
-        print("Program ended")
-        break
+    bot.run(config['discord_token'])
