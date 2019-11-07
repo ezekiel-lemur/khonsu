@@ -7,7 +7,7 @@ from socket import socket, AF_INET, SOCK_DGRAM
 from struct import unpack, calcsize
 from datetime import datetime, timezone
 from pandas import Timestamp, Timedelta
-from time import ctime, perf_counter_ns
+from time import perf_counter_ns
 from collections import deque
 import re
 import posixpath
