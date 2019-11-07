@@ -2,11 +2,14 @@ import discord
 import logging
 import asyncio
 import json
-import tweepy
-from datetime import datetime, timezone, timedelta
-from time import ctime, perf_counter
+from contextlib import closing
+from socket import socket, AF_INET, SOCK_DGRAM
+from struct import unpack, calcsize
+from datetime import datetime, timezone
+from pandas import Timestamp, Timedelta
+from time import ctime, perf_counter_ns
+from collections import deque
 import re
-import threading
 import posixpath
 import httpx
 from urllib.parse import urlsplit, unquote, parse_qs
@@ -14,6 +17,10 @@ from io import BytesIO
 from peony import PeonyClient
 from bs4 import BeautifulSoup
 from cssutils import parseStyle
+
+NTP_PACKET_FORMAT = '!12I'
+NTP_DELTA = 2208988800 # 1970-01-01 00:00:00
+NTP_QUERY = b'\x1b' + 47 * b'\0'
 
 logging.basicConfig (level = logging.WARNING)
 
@@ -29,11 +36,6 @@ consumer_s = config['consumer_s']
 token = config['token']
 token_s = config['token_s']
 
-auth = tweepy.OAuthHandler(consumer,consumer_s)
-auth.set_access_token(token,token_s)
-auth.secure = True
-api = tweepy.API(auth)
-
 live_scores_channel = list()
 price_changes_channel = list()
 team_news_channel = list()
@@ -43,31 +45,41 @@ fpl = config['twitter_id']#add any twitter accounts id here
 bap = config['twitter_id_2']
 team_twitter_ids = config['team_twitter_ids']
 
-last_tweet_used_id = None
-last_tweet_used_bap_id = None
-
 client = PeonyClient(consumer_key=consumer,
                      consumer_secret=consumer_s,
                      access_token=token,
                      access_token_secret=token_s)
 
-watch_time_before_window = timedelta(minutes=2)
-watch_time_after_window = timedelta(minutes=10)
+watch_delta_before_window = Timedelta(minutes=2)
+watch_delta_after_window = Timedelta(minutes=10)
 
-watch_time_adjustment = timedelta(hours=1) - watch_time_after_window
-min_watch_time_adjustment = watch_time_before_window + watch_time_after_window
-
-watch_tweet_count = 5
+watch_delta_adjustment = Timedelta(hours=1) - watch_delta_after_window
+min_watch_delta_adjustment = watch_delta_before_window + watch_delta_after_window
 
 sleep_time_seconds = 3
 
-start_time = datetime.now(timezone.utc)
+watch_tweet_count = 3
 
-start_perf_counter = perf_counter()
+refresh_daily_time = Timestamp.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
+
+
+def get_ntp_time(host='pool.ntp.org', port=123):
+    global start_perf_counter
+
+    with closing(socket(AF_INET, SOCK_DGRAM)) as s:
+        s.sendto(NTP_QUERY, (host, port))
+        recv_data, address = s.recvfrom(1024)
+
+    start_perf_counter = perf_counter_ns()
+    unpacked = unpack(NTP_PACKET_FORMAT, recv_data[0:calcsize(NTP_PACKET_FORMAT)])
+    return unpacked[10] + float(unpacked[11]) / 2**32 - NTP_DELTA
 
 
 async def task():
-    global last_tweet_used_id, last_tweet_used_bap_id
+    global last_tweet_used_id, last_tweet_used_bap_id, start_time
+
+    last_tweet_used_id = None
+    last_tweet_used_bap_id = None
 
     await bot.wait_until_ready()
 
@@ -103,6 +115,8 @@ async def task():
         else:
             print('Couldn\'t find channel {}'.format(chan))
 
+    start_time = Timestamp.fromtimestamp(get_ntp_time()).replace(tzinfo=timezone.utc)
+
     await get_all_fixtures()
 
     print("Ready.")
@@ -117,83 +131,112 @@ async def task():
 
 
 def get_latest_time():
-    return start_time + timedelta(seconds=perf_counter()-start_perf_counter)
+    global start_time, start_perf_counter
+
+    start_time += Timedelta(nanoseconds=perf_counter_ns()-start_perf_counter)
+    start_perf_counter = perf_counter_ns()
+
+    return start_time
 
 
 def get_start_of_day(latest_time):
-    return latest_time.replace(hour=0, minute=0, second=0, microsecond=0)
+    return latest_time.replace(hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
 
 
-async def get_event_fixtures(event_id):
-    global fixtures, teams
-
-    fixtures[event_id] = {}
-
-    matches = []
-
-    async with httpx.AsyncClient() as async_client:
-        matches = (await async_client.get('https://fantasy.premierleague.com/api/fixtures/?event={}#/'.format(event_id))).json()
-
-    latest_day = get_start_of_day(get_latest_time())
-
-    for match in matches:
-        kickoff_time = match['kickoff_time']
-        watch_time = datetime.strptime(kickoff_time, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc) - watch_time_adjustment
-        if (latest_day >= watch_time):
-            continue
-
-        if (watch_time not in fixtures[event_id]):
-            fixtures[event_id][watch_time] = []
-
-        for team in teams:
-            if (team['id'] == match['team_h']):
-                fixtures[event_id][watch_time].append(team['short_name'])
-
-            if (team['id'] == match['team_a']):
-                fixtures[event_id][watch_time].append(team['short_name'])
+def get_refresh_time(latest_time):
+    return latest_time.replace(hour=refresh_daily_time.hour, minute=refresh_daily_time.minute, second=refresh_daily_time.second, microsecond=0, nanosecond=0)
 
 
-def update_latest_event_id():
-    global fixtures, latest_event_id
-
-    latest_event_id = None
-
-    for event_id in sorted(fixtures):
-        for watch_time in sorted(fixtures[event_id]):
-            if (len(fixtures[event_id][watch_time]) > 0):
-                latest_event_id = event_id
-                return
-
-            del fixtures[event_id][watch_time]
-
-        del fixtures[event_id]
-
-
-async def get_all_fixtures():
+def get_event_fixtures(event_matches):
     global fixtures, teams
 
     fixtures = {}
 
+    latest_day = get_start_of_day(get_latest_time())
+
+    for match in event_matches:
+        kickoff_time = datetime.strptime(match['kickoff_time'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+        watch_time = Timestamp(kickoff_time) - watch_delta_adjustment
+        if (latest_day >= watch_time):
+            continue
+
+        if (watch_time not in fixtures):
+            fixtures[watch_time] = []
+
+        for team in teams:
+            if (team['id'] == match['team_h']):
+                fixtures[watch_time].append(team['short_name'])
+
+            if (team['id'] == match['team_a']):
+                fixtures[watch_time].append(team['short_name'])
+
+    return len(fixtures) > 0
+
+
+async def get_all_fixtures():
+    global fixtures, event_ids, teams
+
+    fixtures = {}
+    event_ids = deque([])
+
     async with httpx.AsyncClient() as async_client:
-        r = (await async_client.get('https://fantasy.premierleague.com/api/bootstrap-static/#/')).json()
+        r = await async_client.get('https://fantasy.premierleague.com/api/bootstrap-static/#/')
+
+    bootstrap = r.json()
     
-    teams = r['teams']
+    async with httpx.AsyncClient() as async_client:
+        r = await async_client.get('https://fantasy.premierleague.com/api/fixtures/#/')
 
-    event_promises = []
-    for event in r['events']:
-        event_promises.append(get_event_fixtures(event['id']))
+    all_matches = r.json()
 
-    await asyncio.gather(*event_promises)
-    update_latest_event_id()
+    event_matches_dict = {}
+    for match in all_matches:
+        event_id = match['event']
+        if event_id is None:
+            continue
+
+        if (event_id not in event_matches_dict):
+            event_matches_dict[event_id] = []
+
+        event_matches_dict[event_id].append(match)
+
+    teams = bootstrap['teams']
+
+    for event in bootstrap['events']:
+        event_id = event['id']
+        if (len(fixtures) > 0 or get_event_fixtures(event_matches_dict[event_id])):
+            event_ids.append(event_id)
+
+
+def get_latest_event_id():
+    global fixtures, event_ids
+
+    if (len(event_ids) == 0):
+        return
+
+    for watch_time in sorted(fixtures):
+        if (len(fixtures[watch_time]) > 0):
+            return event_ids[0]
+
+        del fixtures[watch_time]
+
+    event_ids.popleft()
+    if (len(event_ids) == 0):
+        return
+
+    return event_ids[0]
 
 
 async def get_latest_fixtures():
-    global latest_event_id
+    latest_event_id = get_latest_event_id()
 
-    update_latest_event_id()
+    if latest_event_id is None:
+        return
 
-    if latest_event_id:
-        await get_event_fixtures(latest_event_id)
+    async with httpx.AsyncClient() as async_client:
+        r = await async_client.get('https://fantasy.premierleague.com/api/fixtures/?event={}#/'.format(latest_event_id))
+    
+    get_event_fixtures(r.json())
 
 
 def url2filename(url):
@@ -276,7 +319,7 @@ def get_card_url_fileName(url):
 
 
 async def send_picture_tweet(tweet, channel, watch_time=None, team_short_name=None):
-    global fixtures, latest_event_id
+    global fixtures
 
     send_promises = []
 
@@ -301,30 +344,27 @@ async def send_picture_tweet(tweet, channel, watch_time=None, team_short_name=No
             print("Sent teams for {}".format(team_short_name))
     except Exception as e:
         if (watch_time and team_short_name):
-            fixtures[latest_event_id][watch_time].append(team_short_name)
+            fixtures[watch_time].append(team_short_name)
         print(e)
 
 
 async def get_latest_fixture_tweets():
-    global fixtures, latest_event_id
+    global fixtures
 
     latest_time = get_latest_time()
-    latest_day = get_start_of_day(latest_time)
+    refresh_time = get_refresh_time(latest_time)
 
-    if (latest_time - latest_day <= timedelta(seconds=sleep_time_seconds)):
+    if (latest_time - refresh_time <= Timedelta(seconds=sleep_time_seconds)):
         await get_latest_fixtures()
-
-    if (latest_event_id is None):
-        return
 
     get_promises = []
     send_promises = []
 
-    for watch_time in sorted(fixtures[latest_event_id]):
+    for watch_time in sorted(fixtures):
         if (latest_time > watch_time):
-            fixtures[latest_event_id][watch_time].clear()
+            fixtures[watch_time].clear()
         else:
-            team_short_names = fixtures[latest_event_id][watch_time]
+            team_short_names = fixtures[watch_time]
             for team_short_name in team_short_names:
                 get_promises.append(get_latest_team_tweets(watch_time, team_short_name, send_promises))
 
@@ -366,12 +406,12 @@ async def send_tweet(tweet):
 
 
 async def get_latest_team_tweets(watch_time, team_short_name, send_promises):
-    global fixtures, latest_event_id
+    global fixtures
 
     latest_time = get_latest_time()
 
-    min_watch_time = watch_time - min_watch_time_adjustment
-    team_short_names = fixtures[latest_event_id][watch_time]
+    min_watch_time = watch_time - min_watch_delta_adjustment
+    team_short_names = fixtures[watch_time]
 
     if latest_time < min_watch_time:
         return
@@ -382,7 +422,8 @@ async def get_latest_team_tweets(watch_time, team_short_name, send_promises):
         twitter_id = team_twitter_ids[team_short_name]
         tweet_list = await client.api.statuses.user_timeline.get(user_id=twitter_id,page=1,count=watch_tweet_count,tweet_mode='extended',include_rts='false')
         for tweet in reversed(tweet_list):
-            created_at = datetime.strptime(tweet.created_at, '%a %b %d %H:%M:%S %z %Y').replace(tzinfo=timezone.utc)
+            created_at_dt = datetime.strptime(tweet.created_at, '%a %b %d %H:%M:%S %z %Y').replace(tzinfo=timezone.utc)
+            created_at = Timestamp(created_at_dt)
             if (created_at >= min_watch_time):
                 send_promises.append(send_picture_tweet(tweet, team_news_channel, watch_time, team_short_name))
                 return
