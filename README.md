@@ -6,7 +6,6 @@ Requires Python 3.7 (for perf_counter_ns and asyncio) and the following pip pack
 
 discord.py
 pandas
-aiohttp
 lxml
 peony-twitter
 bs4
