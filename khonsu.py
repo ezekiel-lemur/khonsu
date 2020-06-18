@@ -11,7 +11,8 @@ from time import perf_counter_ns
 from collections import deque
 import re
 import posixpath
-import httpx
+import ssl
+import aiohttp
 from urllib.parse import urlsplit, unquote, parse_qs
 from io import BytesIO
 from peony import PeonyClient
@@ -21,10 +22,15 @@ from cssutils import parseStyle
 NTP_PACKET_FORMAT = '!12I'
 NTP_DELTA = 2208988800 # 1970-01-01 00:00:00
 NTP_QUERY = b'\x1b' + 47 * b'\0'
+NTP_HOST = 'pool.ntp.org'
+NTP_PORT = 123
 
 logging.basicConfig (level = logging.WARNING)
 
-bot = discord.Client ()
+ssl_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+conn = aiohttp.TCPConnector(ssl=ssl_context,enable_cleanup_closed=True,force_close=True)
+
+bot = discord.Client (connector=conn)
 
 config = dict()
 with open('config.json') as CONFIG:
@@ -45,13 +51,8 @@ fpl = config['twitter_id']#add any twitter accounts id here
 bap = config['twitter_id_2']
 team_twitter_ids = config['team_twitter_ids']
 
-client = PeonyClient(consumer_key=consumer,
-                     consumer_secret=consumer_s,
-                     access_token=token,
-                     access_token_secret=token_s)
-
-watch_delta_before_window = Timedelta(minutes=2)
-watch_delta_after_window = Timedelta(minutes=10)
+watch_delta_before_window = Timedelta(seconds=30)
+watch_delta_after_window = Timedelta(minutes=6)
 
 watch_delta_adjustment = Timedelta(hours=1) - watch_delta_after_window
 min_watch_delta_adjustment = watch_delta_before_window + watch_delta_after_window
@@ -60,7 +61,7 @@ sleep_time_seconds = 3
 
 watch_tweet_count = 3
 
-refresh_daily_time = Timestamp.utcnow().replace(hour=0, minute=0, second=0, microsecond=0, nanosecond=0)
+refresh_daily_time = Timestamp.fromtimestamp(NTP_DELTA).replace(hour=0, minute=0)
 
 
 def get_ntp_time(host='pool.ntp.org', port=123):
@@ -116,27 +117,30 @@ async def task():
             print('Couldn\'t find channel {}'.format(chan))
 
     start_time = Timestamp.fromtimestamp(get_ntp_time()).replace(tzinfo=timezone.utc)
+    
+    async with aiohttp.ClientSession(connector=conn,skip_auto_headers=['User-Agent']) as session:
+        await get_all_fixtures(session)
 
-    await get_all_fixtures()
+        print("Ready.")
 
-    print("Ready.")
+        client = PeonyClient(
+            consumer_key=consumer,
+            consumer_secret=consumer_s,
+            access_token=token,
+            access_token_secret=token_s, 
+            session=session)
 
-    while True:
-        await asyncio.gather(
-            get_latest_fixture_tweets(),
-            get_latest_tweets(),
-            get_latest_tweets_bap(),
-            asyncio.sleep(sleep_time_seconds)
-        )
+        while True:
+            await asyncio.gather(
+                get_latest_fixture_tweets(session, client),
+                get_latest_tweets(client),
+                get_latest_tweets_bap(session, client),
+                asyncio.sleep(sleep_time_seconds)
+            )
 
 
 def get_latest_time():
-    global start_time, start_perf_counter
-
-    start_time += Timedelta(nanoseconds=perf_counter_ns()-start_perf_counter)
-    start_perf_counter = perf_counter_ns()
-
-    return start_time
+    return start_time + Timedelta(nanoseconds=perf_counter_ns()-start_perf_counter)
 
 
 def get_start_of_day(latest_time):
@@ -173,21 +177,17 @@ def get_event_fixtures(event_matches):
     return len(fixtures) > 0
 
 
-async def get_all_fixtures():
+async def get_all_fixtures(session):
     global fixtures, event_ids, teams
 
     fixtures = {}
     event_ids = deque([])
 
-    async with httpx.AsyncClient() as async_client:
-        r = await async_client.get('https://fantasy.premierleague.com/api/bootstrap-static/#/')
+    async with session.get('https://fantasy.premierleague.com/api/bootstrap-static/') as resp:
+        bootstrap = await resp.json()
 
-    bootstrap = r.json()
-    
-    async with httpx.AsyncClient() as async_client:
-        r = await async_client.get('https://fantasy.premierleague.com/api/fixtures/#/')
-
-    all_matches = r.json()
+    async with session.get('https://fantasy.premierleague.com/api/fixtures/') as resp:
+        all_matches = await resp.json()
 
     event_matches_dict = {}
     for match in all_matches:
@@ -204,7 +204,7 @@ async def get_all_fixtures():
 
     for event in bootstrap['events']:
         event_id = event['id']
-        if (len(fixtures) > 0 or get_event_fixtures(event_matches_dict[event_id])):
+        if (len(fixtures) > 0 or (event_id in event_matches_dict and get_event_fixtures(event_matches_dict[event_id]))):
             event_ids.append(event_id)
 
 
@@ -227,16 +227,18 @@ def get_latest_event_id():
     return event_ids[0]
 
 
-async def get_latest_fixtures():
+async def get_latest_fixtures(session):
     latest_event_id = get_latest_event_id()
 
     if latest_event_id is None:
         return
 
-    async with httpx.AsyncClient() as async_client:
-        r = await async_client.get('https://fantasy.premierleague.com/api/fixtures/?event={}#/'.format(latest_event_id))
+    params = { 'event', latest_event_id }
+
+    async with session.get('https://fantasy.premierleague.com/api/fixtures', params=params) as resp:
+        event_matches = await resp.json()
     
-    get_event_fixtures(r.json())
+    get_event_fixtures(event_matches)
 
 
 def url2filename(url):
@@ -244,21 +246,19 @@ def url2filename(url):
     return posixpath.basename(unquote(urlpath))
 
 
-async def send_url(chan, url, fileName=None, retry_count=0):
+async def send_url(session, chan, url, fileName=None, retry_count=0):
     global fixtures
 
     if (fileName is None):
         fileName = url2filename(url)
 
     try:
-        async with httpx.AsyncClient() as async_client:
-            r = await async_client.get(url)
-
-            await chan.send(file=discord.File(BytesIO(await r.read()), filename=fileName))
+        async with session.get(url) as resp:
+            await chan.send(file=discord.File(BytesIO(await resp.read()), filename=fileName))
     except Exception as e:
         if (retry_count < 5):
             await asyncio.sleep(1)
-            await send_url(chan, url, fileName, retry_count + 1)
+            await send_url(session, chan, url, fileName, retry_count + 1)
         else:
             raise
 
@@ -272,7 +272,7 @@ def get_card_thumbnail_url(card_div):
     return style['background-image'].replace('url(', '').replace(')', '')
 
 
-async def get_card_url(tweet_id):
+async def get_card_url(session, client, tweet_id):
     tweet = await client.api.statuses.show.get(id=tweet_id,tweet_mode='extended',include_card_uri='true')
     card_uri = tweet.get('card_uri')
     if card_uri is None:
@@ -282,25 +282,23 @@ async def get_card_url(tweet_id):
         else:
             return
 
-    tweet_url = '/{}/status/{}'.format(tweet.user.screen_name, tweet.id)
-    async with httpx.AsyncClient(base_url='https://www.twitter.com') as async_client:
-        r = await async_client.get(tweet_url)
+    async with session.get('https://www.twitter.com/{}/status/{}'.format(tweet.user.screen_name, tweet.id)) as resp:
+        tweet_soup = BeautifulSoup(await resp.text(), 'lxml')
 
-        tweet_soup = BeautifulSoup(r.text, 'lxml')
-        card_div = tweet_soup.find('div', attrs={'data-card-url': card_uri})
-        if card_div is None:
-            return
+    card_div = tweet_soup.find('div', attrs={'data-card-url': card_uri})
+    if card_div is None:
+        return
 
-        card_thumbnail_url = get_card_thumbnail_url(card_div)
-        if card_thumbnail_url:
-            return card_thumbnail_url
+    card_thumbnail_url = get_card_thumbnail_url(card_div)
+    if card_thumbnail_url:
+        return card_thumbnail_url
 
-        r = await async_client.get(card_div['data-src'])
+    async with session.get('https://www.twitter.com/{}'.format(card_div['data-src'])) as resp:
+        card_soup = BeautifulSoup(await resp.text(), 'lxml')
 
-        card_soup = BeautifulSoup(r.text, 'lxml')
-        card_img = card_soup.find('img')
-        if card_img:
-            return card_img['data-src']
+    card_img = card_soup.find('img')
+    if card_img:
+        return card_img['data-src']
 
 
 def get_card_url_fileName(url):
@@ -318,7 +316,7 @@ def get_card_url_fileName(url):
     return '{}.{}'.format(fileName, image_fmt)
 
 
-async def send_picture_tweet(tweet, channel, watch_time=None, team_short_name=None):
+async def send_picture_tweet(session, client, tweet, channel, watch_time=None, team_short_name=None):
     global fixtures
 
     send_promises = []
@@ -331,13 +329,13 @@ async def send_picture_tweet(tweet, channel, watch_time=None, team_short_name=No
             for chan in channel:
                 for entity in media:
                     url = entity['media_url']
-                    send_promises.append(send_url(chan, url))
+                    send_promises.append(send_url(session, chan, url))
         else:
-            url = await get_card_url(tweet.id)
+            url = await get_card_url(session, client, tweet.id)
             if url:
                 fileName = get_card_url_fileName(url)
                 for chan in channel:
-                    send_promises.append(send_url(chan, url, fileName))
+                    send_promises.append(send_url(session, chan, url, fileName))
 
         await asyncio.gather(*send_promises)
         if team_short_name:
@@ -348,15 +346,15 @@ async def send_picture_tweet(tweet, channel, watch_time=None, team_short_name=No
         print(e)
 
 
-async def get_latest_fixture_tweets():
+async def get_latest_fixture_tweets(session, client):
     global fixtures
 
     latest_time = get_latest_time()
     refresh_time = get_refresh_time(latest_time)
 
     if (latest_time - refresh_time <= Timedelta(seconds=sleep_time_seconds)):
-        await get_latest_fixtures()
-
+        await get_latest_fixtures(session)
+    
     get_promises = []
     send_promises = []
 
@@ -366,7 +364,7 @@ async def get_latest_fixture_tweets():
         else:
             team_short_names = fixtures[watch_time]
             for team_short_name in team_short_names:
-                get_promises.append(get_latest_team_tweets(watch_time, team_short_name, send_promises))
+                get_promises.append(get_latest_team_tweets(session, client, watch_time, team_short_name, send_promises))
 
     await asyncio.gather(*get_promises)
     await asyncio.gather(*send_promises)
@@ -405,7 +403,7 @@ async def send_tweet(tweet):
         await asyncio.gather(*chan_promises)
 
 
-async def get_latest_team_tweets(watch_time, team_short_name, send_promises):
+async def get_latest_team_tweets(session, client, watch_time, team_short_name, send_promises):
     global fixtures
 
     latest_time = get_latest_time()
@@ -421,11 +419,12 @@ async def get_latest_team_tweets(watch_time, team_short_name, send_promises):
 
         twitter_id = team_twitter_ids[team_short_name]
         tweet_list = await client.api.statuses.user_timeline.get(user_id=twitter_id,page=1,count=watch_tweet_count,tweet_mode='extended',include_rts='false')
-        for tweet in reversed(tweet_list):
+        sorted_list = sorted(reversed(tweet_list), key=lambda tweet: tweet.id)
+        for tweet in sorted_list:
             created_at_dt = datetime.strptime(tweet.created_at, '%a %b %d %H:%M:%S %z %Y').replace(tzinfo=timezone.utc)
             created_at = Timestamp(created_at_dt)
             if (created_at >= min_watch_time):
-                send_promises.append(send_picture_tweet(tweet, team_news_channel, watch_time, team_short_name))
+                send_promises.append(send_picture_tweet(session, client, tweet, team_news_channel, watch_time, team_short_name))
                 return
 
         team_short_names.append(team_short_name)
@@ -434,7 +433,7 @@ async def get_latest_team_tweets(watch_time, team_short_name, send_promises):
         print(e)
 
 
-async def get_latest_tweets():
+async def get_latest_tweets(client):
     global last_tweet_used_id
 
     try:
@@ -454,7 +453,7 @@ async def get_latest_tweets():
         print(e)
 
 
-async def send_tweet_bap(tweet):
+async def send_tweet_bap(session, client, tweet):
     latest_bap = tweet.full_text
     is_Lineups = re.search('Lineups', latest_bap, re.M)
     is_Stats = re.search('Stats', latest_bap, re.M)
@@ -466,7 +465,7 @@ async def send_tweet_bap(tweet):
             print("@FPLStatus stats")
             channel = stats_channel
 
-        await send_picture_tweet(tweet, channel)
+        await send_picture_tweet(session, client, tweet, channel)
     else:
         is_Pen = re.search('Penalty', latest_bap, re.M)
         is_Goal = re.search('Goal', latest_bap, re.M)
@@ -494,7 +493,7 @@ async def send_tweet_bap(tweet):
         await asyncio.gather(*chan_promises)        
         
 
-async def get_latest_tweets_bap():
+async def get_latest_tweets_bap(session, client):
     global last_tweet_used_bap_id
 
     try:
@@ -505,7 +504,7 @@ async def get_latest_tweets_bap():
 
         tweet_list = await client.api.statuses.user_timeline.get(user_id=bap,page=1,count=20,tweet_mode='extended',include_rts='false',since_id=last_tweet_used_bap_id)
         for tweet in tweet_list:
-            tweet_promises.append(send_tweet_bap(tweet))
+            tweet_promises.append(send_tweet_bap(session, client, tweet))
             if (tweet.id > last_tweet_used_bap_id):
                 last_tweet_used_bap_id = tweet.id
 
@@ -517,12 +516,24 @@ async def get_latest_tweets_bap():
 @bot.event
 async def on_message(m):
     if isinstance(m.channel, discord.DMChannel):
-        tweet_id = int(m.content)
-        tweet = await client.api.statuses.show.get(id=tweet_id,tweet_mode='extended')
-        if tweet.user.id_str == fpl:
-            await send_tweet(tweet)
-        elif tweet.user.id_str == bap:
-            await send_tweet_bap(tweet)
+        try:
+            async with aiohttp.ClientSession(connector=conn) as session:
+                client = PeonyClient(
+                    consumer_key=consumer,
+                    consumer_secret=consumer_s,
+                    access_token=token,
+                    access_token_secret=token_s, 
+                    session=session)
+
+                tweet_id = int(m.content)
+                tweet = await client.api.statuses.show.get(id=tweet_id,tweet_mode='extended')
+                if tweet.user.id_str == fpl:
+                    await send_tweet(client, tweet)
+                elif tweet.user.id_str == bap:
+                    await send_tweet_bap(session, client, tweet)
+        except Exception as e:
+            print(e)
+
 
 bot.loop.create_task(task())
 bot.run(config['discord_token'])
