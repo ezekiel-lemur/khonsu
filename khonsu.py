@@ -233,7 +233,7 @@ async def get_latest_fixtures(session):
     if latest_event_id is None:
         return
 
-    params = { 'event', latest_event_id }
+    params = [('event', latest_event_id)]
 
     async with session.get('https://fantasy.premierleague.com/api/fixtures', params=params) as resp:
         event_matches = await resp.json()
