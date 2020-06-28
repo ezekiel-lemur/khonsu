@@ -1,45 +1,41 @@
 {
     "discord_token":"",
-    "twitter_id": "761568335138058240",
-    "twitter_id_2":"377309336",
-    "consumer": "",
-    "consumer_s":"",
-    "token": "",
-    "token_s": "",
+    "twitter_name": "OfficialFPL",
+    "twitter_name_2":"FPLStatus",
     "live_scores_channels": [
-        "351055628246188032",
-        "226427925375877120"
+        351055628246188032,
+        673812751843459082
     ],
     "price_changes_channels": [
-        "351819339349098500"
+        351819339349098500
     ],
     "team_news_channels": [
-        "478974163319783435",
-        "226427925375877120"
+        478974163319783435,
+        673812751843459082
     ],
     "stats_channels": [
-        "478974163319783435"
+        478974163319783435
     ],
-    "team_twitter_ids": {
-        "ARS": "34613288",
-        "CHE": "22910295",
-        "EVE": "15891449",
-        "LIV": "19583545",
-        "MCI": "14573900",
-        "TOT": "121402638",
-        "MUN": "558797310",
-        "LEI": "122392884",
-        "WOL": "49296276",
-        "BOU": "20880206",
-        "CRY": "85307509",
-        "BUR": "441309926",
-        "WHU": "156247074",
-        "NEW": "35758259",
-        "BHA": "57606154",
-        "SOU": "46143892",
-        "WAT": "226590250",
-        "SHU": "63463538",
-        "AVL": "27489253",
-        "NOR": "187572312"
+    "team_twitter_names": {
+        "ARS": "Arsenal",
+        "CHE": "ChelseaFC",
+        "EVE": "Everton",
+        "LIV": "LFC",
+        "MCI": "ManCity",
+        "TOT": "SpursOfficial",
+        "MUN": "ManUtd",
+        "LEI": "LCFC",
+        "WOL": "Wolves",
+        "BOU": "afcbournemouth",
+        "CRY": "CPFC",
+        "BUR": "BurnleyOfficial",
+        "WHU": "WestHam",
+        "NEW": "NUFC",
+        "BHA": "OfficialBHAFC",
+        "SOU": "SouthamptonFC",
+        "WAT": "WatfordFC",
+        "SHU": "SheffieldUnited",
+        "AVL": "AVFCOfficial",
+        "NOR": "NorwichCityFC"
     }
 }
