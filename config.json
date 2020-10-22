@@ -26,16 +26,16 @@
         "MUN": "ManUtd",
         "LEI": "LCFC",
         "WOL": "Wolves",
-        "BOU": "afcbournemouth",
         "CRY": "CPFC",
         "BUR": "BurnleyOfficial",
         "WHU": "WestHam",
         "NEW": "NUFC",
         "BHA": "OfficialBHAFC",
         "SOU": "SouthamptonFC",
-        "WAT": "WatfordFC",
         "SHU": "SheffieldUnited",
         "AVL": "AVFCOfficial",
-        "NOR": "NorwichCityFC"
+        "FUL": "FulhamFC",
+        "LEE": "LUFC",
+        "WBA": "WBA"
     }
 }
