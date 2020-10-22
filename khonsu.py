@@ -15,6 +15,8 @@ import ssl
 import sys
 import aiohttp
 import httpx
+import random
+from fake_useragent import UserAgent
 from urllib.parse import urlsplit, unquote, parse_qs
 from requests_html import HTML
 from io import BytesIO
@@ -27,21 +29,18 @@ NTP_QUERY = b'\x1b' + 47 * b'\0'
 NTP_HOST = 'pool.ntp.org'
 NTP_PORT = 123
 
-twitter_url_fmt = '/i/profiles/show/{}/timeline/tweets'
+tweets_url = 'https://mobile.twitter.com/search'
 twitter_params = {
+    "f": "tweets",
     "include_available_features": "1", 
     "include_entities": "1",
-    "include_rts": "0",
-    "include_new_items_bar": "true"
+    "vertical": "default",
+    "src": "unkn",
+    "reset_error_state": "false"
 }
 
 twitter_headers = {
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "Referer": "https://twitter.com/{}",
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/603.3.8 (KHTML, like Gecko) Version/10.1.2 Safari/603.3.8",
-    "X-Twitter-Active-User": "yes",
-    "X-Requested-With": "XMLHttpRequest",
-    "Accept-Language": "en-US"
+    "X-Requested-With": "XMLHttpRequest"
 }
 
 logging.basicConfig(level = logging.WARNING)
@@ -87,10 +86,7 @@ def get_ntp_time(host='pool.ntp.org', port=123):
 
 
 async def task():
-    global last_tweet_used_id, last_tweet_used_bap_id, start_time
-
-    last_tweet_used_id = None
-    last_tweet_used_bap_id = None
+    global last_tweet_used_id, last_tweet_used_bap_id, start_time, start_ts
 
     await bot.wait_until_ready()
 
@@ -127,8 +123,9 @@ async def task():
             print('Couldn\'t find channel {}'.format(chan))
 
     start_time = Timestamp(get_ntp_time(), unit="s", tz="UTC")
-
-    print(start_time)
+    start_ts = int(start_time.timestamp())
+    last_tweet_used_id = None
+    last_tweet_used_bap_id = None
 
     async with aiohttp.ClientSession(connector=conn) as session:
         await get_all_fixtures(session)
@@ -137,7 +134,7 @@ async def task():
 
         while True:
             await asyncio.gather(
-                get_latest_fixture_tweets(session),
+                #get_latest_fixture_tweets(session),
                 get_latest_tweets(),
                 get_latest_tweets_bap(),
                 asyncio.sleep(sleep_time_seconds)
@@ -250,23 +247,25 @@ def url2filename(url):
     return posixpath.basename(unquote(urlpath))
 
 
-async def send_url(chan, url, fileName=None, retry_count=0):
+async def send_url(chan, url, fileName=None):
     global fixtures
 
     if (fileName is None):
         fileName = url2filename(url)
 
-    try:
-        async with httpx.AsyncClient(base_url='https://www.twitter.com') as client:
-            r = await client.get(url)
-    
-        await chan.send(file=discord.File(BytesIO(r.read()), filename=fileName))
-    except Exception as e:
-        if (retry_count < 5):
-            await asyncio.sleep(1)
-            await send_url(chan, url, fileName, retry_count + 1)
-        else:
-            raise
+    retry_count = 0
+    while True:
+        try:
+            async with httpx.AsyncClient(base_url='https://www.twitter.com') as client:
+                r = await client.get(url)
+        
+            await chan.send(file=discord.File(BytesIO(r.read()), filename=fileName))
+            return
+        except Exception as e:
+            if (retry_count < 5):
+                await asyncio.sleep(1)
+            else:
+                raise
 
 
 async def get_card_url(tweet):
@@ -279,21 +278,21 @@ async def get_card_url(tweet):
                 video_thumbnail = tmp.replace("')", "")
                 return video_thumbnail
 
-        cards = [
-            card_node.attrs["data-src"]
-            for card_node in tweet.find(".card-type-promo_website")
-        ]
+    cards = [
+        card_node.attrs["data-src"]
+        for card_node in tweet.find(".card-type-promo_website")
+    ]
 
-        if len(cards) == 0:
-            return
+    if len(cards) == 0:
+        return
 
-        async with httpx.AsyncClient(base_url='https://www.twitter.com') as client:
-            r = await client.get(cards[0])
+    async with httpx.AsyncClient(base_url='https://www.twitter.com') as client:
+        r = await client.get(cards[0])
 
-        card_soup = BeautifulSoup(r.text, 'lxml')
-        
-        card_img = card_soup.find('img')
-        return card_img['data-src']
+    card_soup = BeautifulSoup(r.text, 'lxml')
+    
+    card_img = card_soup.find('img')
+    return card_img['data-src']
 
 
 def get_card_url_fileName(url):
@@ -311,14 +310,14 @@ def get_card_url_fileName(url):
     return '{}.{}'.format(fileName, image_fmt)
 
 
-async def send_picture_tweet(tweet, channel, watch_time=None, team_short_name=None, last_min_position=None):
+async def send_media_tweet(tweet, channel, team_short_name=None):
     global fixtures
 
     send_promises = []
 
     media = [
-        photo_node.attrs["data-image-url"]
-        for photo_node in tweet.find(".AdaptiveMedia-photoContainer")
+        photo_node.find("div", {"class": "media"}).find("img")["src"].replace(":small", "")
+        for photo_node in tweet.find_all("div", {"class": "card-photo"})
     ]
 
     try:
@@ -328,20 +327,20 @@ async def send_picture_tweet(tweet, channel, watch_time=None, team_short_name=No
                     send_promises.append(send_url(chan, url))
         else:
             url = await get_card_url(tweet)
-            if url:
+            if url is not None:
                 fileName = get_card_url_fileName(url)
                 for chan in channel:
                     send_promises.append(send_url(chan, url, fileName))
 
-        await asyncio.gather(*send_promises)
-        if team_short_name:
-            print("Sent teams for {}".format(team_short_name))
-    except Exception as e:
-        if (watch_time and team_short_name):
-            fixtures[watch_time]['teams'].append(team_short_name)
-            fixtures[watch_time][team_short_name] = last_min_position
+        if len(send_promises) == 0:
+            return False
 
-        print("Error in send_picture_tweet")
+        await asyncio.gather(*send_promises)
+        if team_short_name is not None:
+            print("Sent teams for {}".format(team_short_name))
+        return True
+    except Exception as e:
+        print("Error in send_media_tweet")
         print(e)
 
 
@@ -355,7 +354,6 @@ async def get_latest_fixture_tweets(session):
         await get_latest_fixtures(session)
     
     get_promises = []
-    send_promises = []
 
     for watch_time in sorted(fixtures):
         if (latest_time > watch_time):
@@ -363,10 +361,9 @@ async def get_latest_fixture_tweets(session):
         else:
             team_short_names = fixtures[watch_time]['teams']
             for team_short_name in team_short_names:
-                get_promises.append(get_latest_team_tweets(watch_time, team_short_name, send_promises))
+                get_promises.append(get_latest_team_tweets(watch_time, team_short_name))
 
     await asyncio.gather(*get_promises)
-    await asyncio.gather(*send_promises)
 
 
 async def send_message(chan, embed_, retry_count=0):
@@ -403,7 +400,7 @@ async def send_tweet(text):
         await asyncio.gather(*chan_promises)
 
 
-async def get_latest_team_tweets(watch_time, team_short_name, send_promises):
+async def get_latest_team_tweets(watch_time, team_short_name):
     global fixtures
 
     latest_time = get_latest_time()
@@ -414,130 +411,72 @@ async def get_latest_team_tweets(watch_time, team_short_name, send_promises):
     if latest_time < min_watch_time:
         return
 
-    last_min_position = fixtures[watch_time][team_short_name]
-
     try:
-        team_short_names.remove(team_short_name)
-        fixtures[watch_time][team_short_name] = 0
-
         twitter_name = team_twitter_names[team_short_name]
 
-        tweets_url = twitter_url_fmt.format(twitter_name)
+        min_watch_ts = int(min_watch_time.timestamp())
+        min_tweet_ts = fixtures[watch_time][team_short_name]
+        if min_tweet_ts == 0:
+            min_tweet_ts = min_watch_ts
 
+        max_tweet_ts = int(watch_time.timestamp())
         params = twitter_params.copy()
-        headers = twitter_headers.copy()
-        headers['Referer'] = twitter_headers['Referer'].format(twitter_name)
+        params['q'] = f'from:{twitter_name} exclude:nativeretweets exclude:retweets since:{min_tweet_ts + 1} until:{max_tweet_ts}'
 
-        if last_min_position > 0:
-            params["min_position"] = last_min_position
+        async with httpx.AsyncClient(base_url='https://mobile.twitter.com') as client:
+            r = await client.get(tweets_url, params=params, headers=twitter_headers)
 
-        sorted_list = deque([])
+        fixtures[watch_time][team_short_name] = int(get_latest_time().timestamp())
 
-        while True:
-            async with httpx.AsyncClient(base_url='https://www.twitter.com') as client:
-                r = await client.get(tweets_url, params=params, headers=headers)
+        soup = BeautifulSoup(r, "html.parser")
+        tweets = soup.find_all("table", "tweet")
 
-            resp = r.json()
-            try:
-                html = HTML(
-                    html=resp["items_html"], url="bunk", default_encoding="utf-8"
-                )
-            except ParserError:
-                break
+        tweet_list = []
+        for tweet in tweets:
+            tweet_id = tweet.find("div", {"class": "tweet-text"})["data-id"];
+            tweet_list.append({ "tweet_id": tweet_id, "tweet": tweet })
 
-            tweet_list = []
-            min_position = last_min_position
-            if min_position == 0:
-                min_position = int(resp["min_position"])
-            min_tweet_time = None
-            for tweet in html.find(".stream-item"):
-                try:
-                    text = tweet.find(".tweet-text")[0].full_text
-                except IndexError:
-                    continue
+        for tweet in sorted(tweet_list, key=lambda tweet: tweet["tweet_id"], reverse=True):
+            tweet_sent = await send_media_tweet(tweet["tweet"], team_news_channel, team_short_name)
 
-                tweet_id = int(tweet.attrs["data-item-id"])
-                tweet_time = Timestamp(int(tweet.find("._timestamp")[0].attrs["data-time-ms"]), unit="ms", tz="Europe/London")
-                if tweet_time > watch_time:
-                    continue
-                
-                if min_tweet_time is None or tweet_time < min_tweet_time:
-                    min_tweet_time = tweet_time
-
-                if tweet_time >= min_watch_time:
-                    tweet_list.append({ "tweet_id": tweet_id, "tweet_time": tweet_time, "tweet": tweet })
-                elif tweet_id > last_min_position:
-                    last_min_position = tweet_id
-
-            params["max_position"] = min_position
-            if min_tweet_time is None:
-                continue
-
-            sorted_list.extendleft(sorted(tweet_list, key=lambda tweet: tweet["tweet_id"], reverse=True))
-            if min_tweet_time <= min_watch_time:
-                break
-
-        if len(sorted_list) > 0:
-            send_promises.append(send_picture_tweet(sorted_list[0]["tweet"], team_news_channel, watch_time, team_short_name, last_min_position))
-            return
-
-        team_short_names.append(team_short_name)
-        fixtures[watch_time][team_short_name] = last_min_position
     except Exception as e:
-        team_short_names.append(team_short_name)
-        fixtures[watch_time][team_short_name] = last_min_position
         print("Error in get_latest_team_tweets")
         print(e)
 
 
 async def get_latest_tweets():
-    global last_tweet_used_id
+    global start_ts, last_tweet_used_id
 
     try:
         tweet_promises = []
 
         twitter_name = fpl_name
 
-        tweets_url = twitter_url_fmt.format(twitter_name)
+        max_tweet_ts = int(get_latest_time().timestamp())
 
         params = twitter_params.copy()
-        headers = twitter_headers.copy()
-        headers['Referer'] = twitter_headers['Referer'].format(twitter_name)
+        params['q'] = f' from:{twitter_name} exclude:nativeretweets exclude:retweets since:{start_ts} until:{max_tweet_ts}'
 
-        if last_tweet_used_id is not None:
-            params["min_position"] = last_tweet_used_id
-
-        async with httpx.AsyncClient(base_url='https://www.twitter.com') as client:
-            r = await client.get(tweets_url, params=params, headers=headers)
-    
-        resp = r.json()
-        try:
-            html = HTML(
-                html=resp["items_html"], url="bunk", default_encoding="utf-8"
-            )
-        except ParserError:
-            return
+        async with httpx.AsyncClient(base_url='https://mobile.twitter.com') as client:
+            r = await client.get(tweets_url, params=params, headers=twitter_headers)
+        
+        soup = BeautifulSoup(r, "html.parser")
+        tweets = soup.find_all("table", "tweet")
 
         max_tweet_id = None
-        for tweet in html.find(".stream-item"):
-            try:
-                text = tweet.find(".tweet-text")[0].full_text
-            except IndexError:
-                continue
-
-            tweet_id = int(tweet.attrs["data-item-id"])
-            if max_tweet_id is None or tweet_id > max_tweet_id:
-                max_tweet_id = tweet_id
-
-            if last_tweet_used_id is None:
-                continue
-
-            tweet_promises.append(send_tweet(text))
-
-        await asyncio.gather(*tweet_promises)
+        for tweet in tweets:
+            text = tweet.find("div", {"class": "tweet-text"}).find("div", {"class": "dir-ltr"}).text
+            tweet_id = int(tweet.find("div", {"class": "tweet-text"})["data-id"])
+            if last_tweet_used_id is None or tweet_id > last_tweet_used_id:
+                print(text)
+                tweet_promises.append(send_tweet(text))
+                if max_tweet_id is None or tweet_id > max_tweet_id:
+                    max_tweet_id = tweet_id
 
         if max_tweet_id is not None:
             last_tweet_used_id = max_tweet_id
+
+        await asyncio.gather(*tweet_promises)
 
     except Exception as e:
         print("Error in get_latest_tweets")
@@ -556,7 +495,7 @@ async def send_tweet_bap(text, tweet):
             print("@FPLStatus stats")
             channel = stats_channel
 
-        await send_picture_tweet(tweet, channel)
+        await send_media_tweet(tweet, channel)
     else:
         is_Pen = re.search('Penalty', latest_bap, re.M)
         is_Goal = re.search('Goal', latest_bap, re.M)
@@ -585,53 +524,38 @@ async def send_tweet_bap(text, tweet):
         
 
 async def get_latest_tweets_bap():
-    global last_tweet_used_bap_id
+    global start_ts, last_tweet_used_bap_id
 
     try:
         tweet_promises = []
 
         twitter_name = bap_name
 
-        tweets_url = twitter_url_fmt.format(twitter_name)
+        max_tweet_ts = int(get_latest_time().timestamp())
 
         params = twitter_params.copy()
-        headers = twitter_headers.copy()
-        headers['Referer'] = twitter_headers['Referer'].format(twitter_name)
+        params['q'] = f' from:{twitter_name} exclude:nativeretweets exclude:retweets since:{start_ts} until:{max_tweet_ts}'
 
-        if last_tweet_used_bap_id is not None:
-            params["min_position"] = last_tweet_used_bap_id
-
-        async with httpx.AsyncClient(base_url='https://www.twitter.com') as client:
-            r = await client.get(tweets_url, params=params, headers=headers)
+        async with httpx.AsyncClient(base_url='https://mobile.twitter.com') as client:
+            r = await client.get(tweets_url, params=params, headers=twitter_headers)
         
-        resp = r.json()
-        try:
-            html = HTML(
-                html=resp["items_html"], url="bunk", default_encoding="utf-8"
-            )
-        except ParserError:
-            return
+        soup = BeautifulSoup(r, "html.parser")
+        tweets = soup.find_all("table", "tweet")
 
         max_tweet_id = None
-        for tweet in html.find(".stream-item"):
-            try:
-                text = tweet.find(".tweet-text")[0].full_text
-            except IndexError:
-                continue
-
-            tweet_id = int(tweet.attrs["data-item-id"])
-            if (max_tweet_id is None or tweet_id > max_tweet_id):
-                max_tweet_id = tweet_id
-
-            if last_tweet_used_bap_id is None:
-                continue
-
-            tweet_promises.append(send_tweet_bap(text, tweet))
-
-        await asyncio.gather(*tweet_promises)
+        for tweet in tweets:
+            text = tweet.find("div", {"class": "tweet-text"}).find("div", {"class": "dir-ltr"}).text
+            tweet_id = int(tweet.find("div", {"class": "tweet-text"})["data-id"])
+            if last_tweet_used_bap_id is None or tweet_id > last_tweet_used_bap_id:
+                print(text)
+                tweet_promises.append(send_tweet_bap(text, tweet))
+                if max_tweet_id is None or tweet_id > max_tweet_id:
+                    max_tweet_id = tweet_id
 
         if max_tweet_id is not None:
             last_tweet_used_bap_id = max_tweet_id
+
+        await asyncio.gather(*tweet_promises)
 
     except Exception as e:
         print("Error in get_latest_tweets_bap")
